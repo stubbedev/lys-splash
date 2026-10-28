@@ -240,9 +240,13 @@ func (s *Server) nak(c *Conn) {
 }
 
 // Close stops accepting, hangs up every connection and waits until each
-// connection's HangUp has been delivered.
+// connection's HangUp has been delivered. Closing again does nothing.
 func (s *Server) Close() error {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
 	s.closed = true
 	var errs []error
 	if err := s.ln.Close(); err != nil {
