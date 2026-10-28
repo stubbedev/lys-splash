@@ -1,0 +1,12 @@
+# The splash's colours as #rrggbb. The background stays black so the
+# firmware's logo, drawn on black, does not change underneath.
+background: "#000000"
+foreground: "#d8d9e6"
+accent: "#ffb454"
+# firmware: the firmware's own logo (ACPI BGRT) when it left one, else lys's.
+# lys: always lys's logo.
+logo: firmware
+# spinner or dots.
+throbber: spinner
+# Show the name of each unit systemd starts under the throbber.
+units: false

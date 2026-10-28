@@ -9,7 +9,9 @@ speaks plymouthd's socket protocol, so systemd and its password agents
 talk to it unchanged.
 
 One static, pure-Go binary (`CGO_ENABLED=0`) with its theme embedded,
-so the initrd carries no libraries for it.
+so the initrd carries no libraries for it. The embedded font is
+Cantarell Regular under the SIL Open Font License 1.1
+(`internal/theme/assets/LICENSE-Cantarell.txt`); the logo is lys's.
 
 The implementation is tracked in the repository's issues.
 
@@ -19,6 +21,7 @@ The implementation is tracked in the repository's issues.
 | --- | --- |
 | `internal/protocol` | plymouthd's socket protocol: requests and responses, encoded and decoded |
 | `internal/server` | The daemon side: the abstract socket, peer credentials, requests answered now or later |
+| `internal/theme` | The validated `theme.yaml` (default embedded) and the frame drawn from the splash's state with lys-lib's canvas, damage included: the firmware's BGRT logo or lys's, a throbber or update progress bar, the message line and the prompt |
 | `internal/kms` | Every card's outputs on two dumb buffers each: mode and scale choice, panel rotation, paced damage-limited flips, cards followed through kernel uevents |
 
 ## Recipes
