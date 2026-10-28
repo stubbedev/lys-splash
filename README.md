@@ -19,6 +19,7 @@ The implementation is tracked in the repository's issues.
 | --- | --- |
 | `internal/protocol` | plymouthd's socket protocol: requests and responses, encoded and decoded |
 | `internal/server` | The daemon side: the abstract socket, peer credentials, requests answered now or later |
+| `internal/kms` | Every card's outputs on two dumb buffers each: mode and scale choice, panel rotation, paced damage-limited flips, cards followed through kernel uevents |
 
 ## Recipes
 
@@ -42,7 +43,9 @@ from downloading itself.
 - `nix build` builds the package (`nix/package.nix`; the dev shell is
   `nix/shell.nix` and the checks `nix/checks.nix`, all imported by
   `flake.nix`; `vendorHash` changes with go.sum)
-- `nix flake check` runs the checks, among them `plymouth-client`
+- `nix flake check` runs the checks, among them `plymouth-client` and
+  `vm-kms`, a NixOS VM whose only card is vkms that runs the kms
+  package's real-card test as root
 - `nix run` runs it
 - `nix fmt` formats the nix files with alejandra
 
