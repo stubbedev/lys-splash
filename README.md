@@ -13,6 +13,13 @@ so the initrd carries no libraries for it.
 
 The implementation is tracked in the repository's issues.
 
+## Layout
+
+| Package | What it is |
+| --- | --- |
+| `internal/protocol` | plymouthd's socket protocol: requests and responses, encoded and decoded |
+| `internal/server` | The daemon side: the abstract socket, peer credentials, requests answered now or later |
+
 ## Recipes
 
 | Recipe | What it does |
@@ -22,6 +29,7 @@ The implementation is tracked in the repository's issues.
 | `just lint` | `golangci-lint run` against the strict config in `.golangci.yml` |
 | `just test` | `go test ./...` |
 | `just build` | Compile-check every package |
+| `just plymouth-client` | Run nixpkgs' `plymouth` client against the server (`checks.plymouth-client`) |
 | `just fmt` | Format every Go source in place |
 
 Every dev tool (Go toolchain pinned to the version go.mod declares, gopls,
@@ -32,8 +40,9 @@ from downloading itself.
 ## Nix
 
 - `nix build` builds the package (`nix/package.nix`; the dev shell is
-  `nix/shell.nix`, both imported by `flake.nix`; add a `vendorHash`
-  once go.mod grows dependencies)
+  `nix/shell.nix` and the checks `nix/checks.nix`, all imported by
+  `flake.nix`; `vendorHash` changes with go.sum)
+- `nix flake check` runs the checks, among them `plymouth-client`
 - `nix run` runs it
 - `nix fmt` formats the nix files with alejandra
 

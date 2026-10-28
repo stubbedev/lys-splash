@@ -23,6 +23,10 @@ test:
 build:
     go build -o /dev/null ./...
 
+# Run nixpkgs' plymouth client against the server, in the nix sandbox.
+plymouth-client:
+    nix build --no-link -L .#checks.x86_64-linux.plymouth-client
+
 # Format every Go source in place with gofmt.
 fmt:
     gofmt -w .

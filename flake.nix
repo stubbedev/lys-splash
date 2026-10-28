@@ -19,6 +19,7 @@
       imports = [
         ./nix/package.nix
         ./nix/shell.nix
+        ./nix/checks.nix
       ];
     };
 }
