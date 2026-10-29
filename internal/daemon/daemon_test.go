@@ -560,7 +560,11 @@ func TestNeedsReexec(t *testing.T) {
 		{Boot, "/bin/lys-splash", true, true},
 		{Boot, "@/bin/lys-splash", true, false},
 		{Boot, "/bin/lys-splash", false, false},
-		{Shutdown, "/bin/lys-splash", true, false},
+		{Updates, "/bin/lys-splash", true, false},
+		{Shutdown, "/bin/lys-splash", false, true},
+		{Reboot, "/bin/lys-splash", false, true},
+		{Kexec, "/bin/lys-splash", true, true},
+		{Reboot, "@/bin/lys-splash", false, false},
 	}
 	for _, tc := range tests {
 		if got := NeedsReexec(tc.mode, tc.argv0, tc.initrd); got != tc.want {

@@ -557,6 +557,7 @@ func (d *daemon) showMessages() error {
 
 func (d *daemon) quit(retain bool) error {
 	d.quitted = true
+	d.cfg.Log.Info("quitting", "mode", d.cfg.Mode, "retain", retain)
 	errs := []error{d.asker.Close()}
 	if d.cfg.Mode == Boot && d.writable {
 		errs = append(errs, SaveBootDuration(d.cfg.BootDuration, time.Since(d.started)))

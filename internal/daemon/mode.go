@@ -55,11 +55,14 @@ const InitrdRelease = "/etc/initrd-release"
 const RootStorageMarker = '@'
 
 // NeedsReexec reports whether the splash, about to run in mode with argv0,
-// must first re-execute itself with RootStorageMarker leading argv[0] to
-// survive the switch to the real root: in boot mode inside the initrd only,
-// and only once.
+// must first re-execute itself with RootStorageMarker leading argv[0], once.
+// In boot mode inside the initrd the marker lets it survive the switch to
+// the real root. In the shutdown, reboot and kexec modes it keeps
+// systemd-shutdown from killing it, so its card stays open until the power
+// goes: the kernel puts fbdev's console back on the screen when the last
+// file on a card closes, CLOSEFB or not.
 func NeedsReexec(mode Mode, argv0 string, initrd bool) bool {
-	return mode == Boot && initrd && !strings.HasPrefix(argv0, string(RootStorageMarker))
+	return (mode == Boot && initrd || mode.stopping()) && !strings.HasPrefix(argv0, string(RootStorageMarker))
 }
 
 // InInitrd reports whether this process runs in the initrd.

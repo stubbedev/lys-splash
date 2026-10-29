@@ -122,7 +122,7 @@ func runDaemon(argv []string, plymouthd bool) int {
 	if daemon.NeedsReexec(o.mode, argv[0], initrd) {
 		marked := append([]string{string(daemon.RootStorageMarker) + argv[0]}, argv[1:]...)
 		err := unix.Exec(selfExe, marked, os.Environ())
-		log.Error("re-executing with argv[0] marked to survive the switch to the real root", "err", err)
+		log.Error("re-executing with argv[0] marked for systemd to spare the splash", "err", err)
 		return 1
 	}
 	if plymouthd && !o.noDaemon && os.Getenv(daemonizedEnv) == "" {
