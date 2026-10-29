@@ -20,6 +20,7 @@
           runHook postInstall
         '';
       };
+    units = pkgs.callPackage ./units.nix {splash = self'.packages.default;};
   in {
     checks = {
       package = self'.packages.default;
@@ -37,6 +38,7 @@
         inherit pkgs;
         splash = self'.packages.default;
       };
+      units = import ./units-check.nix {inherit pkgs units;};
       # The daemon end to end on a virtio-gpu VM: it lights the output and
       # takes tty1, the plymouth client and systemd's password agent talk
       # to it, a password typed on the VM's keyboard comes back, and quit

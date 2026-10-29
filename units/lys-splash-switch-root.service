@@ -1,0 +1,17 @@
+[Unit]
+Description=Move lys-splash into the real root
+DefaultDependencies=no
+After=lys-splash-start.service
+Before=initrd-switch-root.service
+Conflicts=plymouth-switch-root.service
+ConditionKernelCommandLine=!plymouth.enable=0
+ConditionPathExists=/etc/initrd-release
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=-@lys_splash@ update-root-fs --new-root-dir=/sysroot
+StandardInput=null
+
+[Install]
+WantedBy=initrd-switch-root.target

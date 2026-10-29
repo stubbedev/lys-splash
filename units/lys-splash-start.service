@@ -1,0 +1,21 @@
+[Unit]
+Description=Show the lys-splash boot splash
+DefaultDependencies=no
+Wants=lys-splash-ask-password.path systemd-vconsole-setup.service
+After=systemd-vconsole-setup.service systemd-udev-trigger.service systemd-udevd.service
+Before=lys-splash-ask-password.service
+Conflicts=plymouth-start.service
+ConditionKernelCommandLine=!plymouth.enable=0
+ConditionVirtualization=!container
+IgnoreOnIsolate=true
+
+[Service]
+Type=notify
+ExecStart=@lys_splash@ --mode=boot --pid-file=/run/plymouth/pid
+ExecStartPost=-@lys_splash@ show-splash
+RemainAfterExit=yes
+KillMode=mixed
+SendSIGKILL=no
+
+[Install]
+WantedBy=sysinit.target initrd-switch-root.target

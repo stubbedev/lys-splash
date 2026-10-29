@@ -1,0 +1,16 @@
+[Unit]
+Description=Tell lys-splash the root is writable
+DefaultDependencies=no
+After=local-fs.target lys-splash-start.service
+Before=sysinit.target
+Conflicts=plymouth-read-write.service
+ConditionKernelCommandLine=!plymouth.enable=0
+ConditionPathExists=!/etc/initrd-release
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=-@lys_splash@ update-root-fs --read-write
+
+[Install]
+WantedBy=sysinit.target

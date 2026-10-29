@@ -1,0 +1,17 @@
+[Unit]
+Description=Show the lys-splash halt splash
+DefaultDependencies=no
+After=getty@tty1.service display-manager.service lys-splash-start.service
+Before=systemd-halt.service
+Conflicts=plymouth-halt.service
+ConditionKernelCommandLine=!plymouth.enable=0
+ConditionVirtualization=!container
+
+[Service]
+Type=notify
+ExecStart=@lys_splash@ --mode=shutdown
+ExecStartPost=-@lys_splash@ show-splash
+RemainAfterExit=yes
+
+[Install]
+WantedBy=halt.target
