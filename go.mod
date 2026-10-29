@@ -3,14 +3,13 @@ module github.com/stubbedev/lys-splash
 go 1.27.3
 
 require (
-	github.com/stubbedev/lys-lib v0.1.1-0.20261028202631-0a9a6e73c915
+	github.com/stubbedev/lys-lib v0.1.1-0.20261029154144-c3c0d438dfc8
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/image v0.47.0
 	golang.org/x/sys v0.49.0
 )
 
 require (
-	github.com/go-text/typesetting v0.3.5 // indirect
 	github.com/kettek/apng v0.0.0-20250827064933-2bb5f5fcf253 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef // indirect
