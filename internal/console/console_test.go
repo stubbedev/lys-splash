@@ -34,6 +34,10 @@ func (f *fakeTTY) Read([]byte) (int, error)    { return 0, os.ErrClosed }
 func (f *fakeTTY) Write(b []byte) (int, error) { return f.out.Write(b) }
 func (f *fakeTTY) Mode() (int, error)          { return f.mode, nil }
 func (f *fakeTTY) KeyboardMode() (int, error)  { return f.kbMode, nil }
+func (f *fakeTTY) Winsize() (unix.Winsize, error) {
+	return unix.Winsize{Row: 25, Col: 80}, nil
+}
+
 func (f *fakeTTY) Termios() (unix.Termios, error) {
 	return f.termios, nil
 }
@@ -96,6 +100,28 @@ func TestTakeOverAndRestore(t *testing.T) {
 	calls := len(f.calls)
 	if err := v.Restore(); err != nil || len(f.calls) != calls {
 		t.Errorf("a second Restore acted: %v, calls %v", err, f.calls[calls:])
+	}
+}
+
+func TestReclaimAfterAReset(t *testing.T) {
+	t.Parallel()
+	f := newFakeTTY()
+	v, err := takeOver(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, kb := f.termios, f.kbMode
+	f.termios.Lflag |= unix.ICANON | unix.ECHO
+	f.kbMode = 0x01
+	if err := v.Reclaim(); err != nil {
+		t.Fatal(err)
+	}
+	if f.termios != raw || f.kbMode != kb {
+		t.Errorf("after Reclaim: lflag %#x, kbmode %d; want %#x and %d", f.termios.Lflag, f.kbMode, raw.Lflag, kb)
+	}
+	f.failSet["termios"] = unix.EIO
+	if err := v.Reclaim(); !errors.Is(err, unix.EIO) || !strings.Contains(err.Error(), "/dev/tty1") {
+		t.Errorf("a failed Reclaim = %v, want EIO naming /dev/tty1", err)
 	}
 }
 

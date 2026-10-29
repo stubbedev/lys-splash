@@ -51,10 +51,31 @@ type Display interface {
 type Terminal interface {
 	Graphics() error
 	Text() error
+	Rows() (int, error)
+	Reclaim() error
 	Read(b []byte) (int, error)
 	Write(b []byte) (int, error)
 	Restore() error
 	Leave() error
+}
+
+// Console is the console's output, captured while the splash shows so the
+// kernel console does not draw over it, and shown as the boot messages.
+type Console interface {
+	Read(b []byte) (int, error)
+	// Restore gives the console back and writes lines to it.
+	Restore(lines []string) error
+	// Leave gives the console back without writing to it.
+	Leave() error
+}
+
+// Devices are what the splash shows on and reads from. VT is nil on a
+// kernel without VTs, and Console nil when the console's output could not
+// be captured.
+type Devices struct {
+	Display Display
+	VT      Terminal
+	Console Console
 }
 
 // KMS adapts a kms.Display to Display.
@@ -107,12 +128,16 @@ type event struct {
 	call   *server.Call
 	hangup *server.Conn
 	keys   []key.Key
+	output []byte
 }
 
 type daemon struct {
 	cfg      Config
 	display  Display
 	vt       Terminal
+	console  Console
+	messages console.Scrollback
+	details  bool
 	bgrt     *theme.BGRT
 	renderer *theme.Renderer
 	units    bool
@@ -135,16 +160,17 @@ type daemon struct {
 // SIGTERM: it quits as a quit request without retain would, except in the
 // shutdown, reboot and kexec modes, where the frame stays until the power
 // goes. Whatever ends Run, a panic in a handler included, gives the VT back
-// and releases the display. vt is nil on a kernel without VTs.
-func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, display Display, vt Terminal) (err error) {
+// and releases the display and the console.
+func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, dev Devices) (err error) {
 	r, err := theme.NewRenderer(t, bgrt)
 	if err != nil {
 		return err
 	}
 	d := &daemon{
 		cfg:      cfg,
-		display:  display,
-		vt:       vt,
+		display:  dev.Display,
+		vt:       dev.VT,
+		console:  dev.Console,
 		bgrt:     bgrt,
 		renderer: r,
 		units:    t.Units,
@@ -172,8 +198,11 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, displ
 		close(d.done)
 		err = errors.Join(err, srv.Close(), <-served)
 	}()
-	if vt != nil {
+	if d.vt != nil {
 		go d.readKeys()
+	}
+	if d.console != nil {
+		go d.readConsole()
 	}
 	if err := d.redraw(); err != nil {
 		cfg.Log.Warn("drawing the first frame", "err", err)
@@ -215,6 +244,8 @@ func (d *daemon) loop(ctx context.Context) error {
 				reply, err = d.request(e.call)
 			case e.hangup != nil:
 				d.asker.HangUp(e.hangup)
+			case e.output != nil:
+				err = d.output(e.output)
 			default:
 				err = d.typed(e.keys)
 			}
@@ -264,6 +295,7 @@ func (d *daemon) readKeys() {
 	for {
 		n, err := d.vt.Read(buf)
 		if err != nil {
+			d.stopped("reading the keyboard", err)
 			return
 		}
 		keys := dec.Decode(nil, buf[:n])
@@ -272,15 +304,71 @@ func (d *daemon) readKeys() {
 	}
 }
 
+func (d *daemon) readConsole() {
+	buf := make([]byte, 4096)
+	for {
+		n, err := d.console.Read(buf)
+		if err != nil {
+			d.stopped("capturing the console", err)
+			return
+		}
+		d.post(event{output: slices.Clone(buf[:n])})
+	}
+}
+
+func (d *daemon) stopped(what string, err error) {
+	select {
+	case <-d.done:
+	default:
+		if !errors.Is(err, os.ErrClosed) {
+			d.cfg.Log.Error("stopped "+what, "err", err)
+		}
+	}
+}
+
+func (d *daemon) output(b []byte) error {
+	if _, err := d.messages.Write(b); err != nil {
+		return err
+	}
+	if !d.details || d.vt == nil {
+		return nil
+	}
+	_, err := d.vt.Write(b)
+	return err
+}
+
 func (d *daemon) typed(keys []key.Key) error {
 	if d.inactive {
 		return nil
 	}
 	var errs []error
 	for _, k := range keys {
+		if k.Kind == key.Escape {
+			errs = append(errs, d.toggleDetails())
+			continue
+		}
 		errs = append(errs, d.asker.Key(k))
 	}
 	return errors.Join(errs...)
+}
+
+func (d *daemon) toggleDetails() error {
+	d.details = !d.details
+	d.shown = nil
+	if len(d.display.Screens()) == 0 {
+		if d.details {
+			return nil
+		}
+		_, err := d.vt.Write([]byte(console.ClearScreen))
+		return err
+	}
+	if d.details {
+		d.cfg.Log.Info("showing the boot messages")
+		return d.display.Deactivate()
+	}
+	d.cfg.Log.Info("showing the splash again")
+	clear(d.drawn)
+	return d.display.Reactivate()
 }
 
 func (d *daemon) animating() bool {
@@ -359,23 +447,41 @@ func (d *daemon) apply(req protocol.Request) error {
 		d.state.Hidden = true
 	case protocol.Deactivate:
 		d.inactive = true
+		if d.details {
+			d.details = false
+			return nil
+		}
 		return d.display.Deactivate()
 	case protocol.Reactivate:
-		d.inactive = false
+		d.inactive, d.details = false, false
 		clear(d.drawn)
-		return d.display.Reactivate()
+		return errors.Join(d.display.Reactivate(), d.reclaim())
 	case protocol.IgnoreKeystroke:
 		return d.asker.Ignore(r.Keys)
 	case protocol.Reload:
 		return d.reload()
 	case protocol.SystemInitialized:
 		d.writable = true
+		return d.reclaim()
 	case protocol.Error:
 		d.cfg.Log.Warn("the boot reported an error")
 	case protocol.Ping, protocol.Quit, protocol.Password, protocol.Question,
 		protocol.CachedPassword, protocol.WatchKeystroke, protocol.HasActiveVT, protocol.NewRoot:
 	}
 	return nil
+}
+
+// reclaim takes the VT back as the splash left it, after systemd reset the
+// console in the real root or a display manager had it.
+func (d *daemon) reclaim() error {
+	if d.vt == nil {
+		return nil
+	}
+	err := d.vt.Reclaim()
+	if d.graphics {
+		err = errors.Join(err, d.vt.Graphics())
+	}
+	return err
 }
 
 func (d *daemon) reload() error {
@@ -392,7 +498,7 @@ func (d *daemon) reload() error {
 
 func (d *daemon) redraw() error {
 	screens := d.display.Screens()
-	if len(screens) == 0 {
+	if len(screens) == 0 || d.details {
 		return d.redrawText()
 	}
 	var errs []error
@@ -431,10 +537,22 @@ func (d *daemon) redrawText() error {
 		d.graphics, d.shown = false, nil
 	}
 	clear(d.drawn)
+	if d.details && d.shown == nil {
+		errs = append(errs, d.showMessages())
+	}
 	errs = append(errs, console.TextView{W: d.vt}.Show(d.shown, d.state))
 	state := d.state
 	d.shown = &state
 	return errors.Join(errs...)
+}
+
+func (d *daemon) showMessages() error {
+	rows, err := d.vt.Rows()
+	if err != nil {
+		return err
+	}
+	_, err = d.vt.Write(d.messages.Screen(rows))
+	return err
 }
 
 func (d *daemon) quit(retain bool) error {
@@ -453,6 +571,13 @@ func (d *daemon) quit(retain bool) error {
 			errs = append(errs, d.vt.Leave())
 		} else {
 			errs = append(errs, d.vt.Restore())
+		}
+	}
+	if d.console != nil {
+		if retain {
+			errs = append(errs, d.console.Leave())
+		} else {
+			errs = append(errs, d.console.Restore(d.messages.Lines()))
 		}
 	}
 	return errors.Join(errs...)

@@ -91,6 +91,7 @@ type fakeVT struct {
 	mu       sync.Mutex
 	graphics bool
 	restored string
+	reclaims int
 	out      strings.Builder
 }
 
@@ -114,6 +115,22 @@ func (v *fakeVT) Write(b []byte) (int, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.out.Write(b)
+}
+
+func (v *fakeVT) Rows() (int, error) { return 3, nil }
+
+func (v *fakeVT) Reclaim() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.reclaims++
+	v.graphics = false
+	return nil
+}
+
+func (v *fakeVT) reclaimed() (int, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.reclaims, v.graphics
 }
 
 func (v *fakeVT) Graphics() error {
@@ -157,6 +174,7 @@ type run struct {
 	done     chan error
 	roots    chan string
 	duration string
+	console  *fakeConsole
 }
 
 type setup struct {
@@ -170,7 +188,7 @@ type setup struct {
 
 func start(t *testing.T, s setup) *run {
 	t.Helper()
-	r := &run{socket: "@lys-splash-daemon-test-" + rand.Text(), display: &fakeDisplay{}, done: make(chan error, 1), roots: make(chan string, 4), duration: s.duration}
+	r := &run{socket: "@lys-splash-daemon-test-" + rand.Text(), display: &fakeDisplay{}, done: make(chan error, 1), roots: make(chan string, 4), duration: s.duration, console: newConsole()}
 	if r.duration == "" {
 		r.duration = filepath.Join(t.TempDir(), "boot-duration")
 	}
@@ -196,7 +214,9 @@ func start(t *testing.T, s setup) *run {
 		log = slog.New(slog.DiscardHandler)
 	}
 	cfg := Config{Mode: s.mode, Socket: r.socket, Owner: uint32(os.Getuid()), Chroot: chroot, BootDuration: r.duration, Log: log}
-	go func() { r.done <- Run(ctx, cfg, theme.Default(), nil, r.display, vt) }()
+	go func() {
+		r.done <- Run(ctx, cfg, theme.Default(), nil, Devices{Display: r.display, VT: vt, Console: r.console})
+	}()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -393,13 +413,14 @@ func TestQuitPaths(t *testing.T) {
 		screens int
 		retain  bool
 		vt      string
+		console string
 	}{
-		{"quit", Boot, &protocol.Quit{}, 1, false, "restore"},
-		{"quit retaining", Boot, &protocol.Quit{Retain: true}, 1, true, "leave"},
-		{"quit retaining in text", Boot, &protocol.Quit{Retain: true}, 0, true, "restore"},
-		{"SIGTERM at boot", Boot, nil, 1, false, "restore"},
-		{"SIGTERM at reboot", Reboot, nil, 1, true, "leave"},
-		{"SIGTERM at shutdown", Shutdown, nil, 1, true, "leave"},
+		{"quit", Boot, &protocol.Quit{}, 1, false, "restore", "restore"},
+		{"quit retaining", Boot, &protocol.Quit{Retain: true}, 1, true, "leave", "leave"},
+		{"quit retaining in text", Boot, &protocol.Quit{Retain: true}, 0, true, "restore", "leave"},
+		{"SIGTERM at boot", Boot, nil, 1, false, "restore", "restore"},
+		{"SIGTERM at reboot", Reboot, nil, 1, true, "leave", "leave"},
+		{"SIGTERM at shutdown", Shutdown, nil, 1, true, "leave", "leave"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -422,6 +443,9 @@ func TestQuitPaths(t *testing.T) {
 			}
 			if got := r.vt.how(); got != tc.vt {
 				t.Errorf("the VT was given back by %q, want %q", got, tc.vt)
+			}
+			if got, _ := r.console.released(); got != tc.console {
+				t.Errorf("the console was given back by %q, want %q", got, tc.console)
 			}
 			if _, err := net.Dial("unix", r.socket); err == nil {
 				t.Error("the socket still listens after the quit")
@@ -452,7 +476,7 @@ func TestPanicRestoresTheVT(t *testing.T) {
 	panicked := make(chan any, 1)
 	go func() {
 		defer func() { panicked <- recover() }()
-		_ = Run(t.Context(), cfg, theme.Default(), nil, display, vt)
+		_ = Run(t.Context(), cfg, theme.Default(), nil, Devices{Display: display, VT: vt})
 	}()
 	var c net.Conn
 	deadline := time.Now().Add(5 * time.Second)
@@ -490,7 +514,7 @@ func TestListenFailureGivesTheVTBack(t *testing.T) {
 	vt := newVT()
 	display := &fakeDisplay{}
 	cfg := Config{Socket: r.socket, Owner: uint32(os.Getuid()), Log: slog.New(slog.DiscardHandler)}
-	if err := Run(t.Context(), cfg, theme.Default(), nil, display, vt); err == nil {
+	if err := Run(t.Context(), cfg, theme.Default(), nil, Devices{Display: display, VT: vt}); err == nil {
 		t.Fatal("Run on a taken socket succeeded")
 	}
 	if vt.how() != "restore" || !display.closed {
@@ -554,5 +578,19 @@ func TestParseMode(t *testing.T) {
 	}
 	if _, err := ParseMode("suspend"); err == nil {
 		t.Error("an unknown mode parsed")
+	}
+}
+
+func TestTheVTIsReclaimedOnceTheRootIsWritableAndOnReactivate(t *testing.T) {
+	t.Parallel()
+	r := start(t, setup{screens: 1})
+	r.call(t, protocol.SystemInitialized{}, protocol.Ack{})
+	if n, graphics := r.vt.reclaimed(); n != 1 || !graphics {
+		t.Errorf("after the root became writable the VT was reclaimed %d times, graphics %v; want once, in graphics", n, graphics)
+	}
+	r.call(t, protocol.Deactivate{}, protocol.Ack{})
+	r.call(t, protocol.Reactivate{}, protocol.Ack{})
+	if n, graphics := r.vt.reclaimed(); n != 2 || !graphics {
+		t.Errorf("after reactivate the VT was reclaimed %d times, graphics %v; want twice, in graphics", n, graphics)
 	}
 }

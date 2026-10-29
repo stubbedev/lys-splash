@@ -218,10 +218,19 @@ func serve(o options, log *slog.Logger) (err error) {
 	default:
 		vt = v
 	}
+	var capture daemon.Console
+	if c, err := console.CaptureConsole(console.SystemPaths); err != nil {
+		log.Warn("showing no boot messages", "err", err)
+	} else {
+		capture = c
+	}
 	display, err := kms.Open(kms.SystemPaths, log)
 	if err != nil {
 		if vt != nil {
 			err = errors.Join(err, vt.Restore())
+		}
+		if capture != nil {
+			err = errors.Join(err, capture.Leave())
 		}
 		return err
 	}
@@ -247,5 +256,5 @@ func serve(o options, log *slog.Logger) (err error) {
 		BootDuration: daemon.BootDurationFile,
 		Log:          log,
 	}
-	return daemon.Run(ctx, cfg, t, bgrt, daemon.KMS{Display: display}, vt)
+	return daemon.Run(ctx, cfg, t, bgrt, daemon.Devices{Display: daemon.KMS{Display: display}, VT: vt, Console: capture})
 }

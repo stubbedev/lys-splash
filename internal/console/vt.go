@@ -50,6 +50,7 @@ type terminal interface {
 	SetKeyboardMode(mode int) error
 	Termios() (unix.Termios, error)
 	SetTermios(t unix.Termios) error
+	Winsize() (unix.Winsize, error)
 }
 
 type device struct {
@@ -96,6 +97,17 @@ func (d device) Termios() (t unix.Termios, err error) {
 	return t, err
 }
 
+func (d device) Winsize() (w unix.Winsize, err error) {
+	err = d.control(func(fd int) error {
+		got, err := unix.IoctlGetWinsize(fd, unix.TIOCGWINSZ)
+		if err == nil {
+			w = *got
+		}
+		return err
+	})
+	return w, err
+}
+
 func (d device) SetTermios(t unix.Termios) error {
 	return d.control(func(fd int) error { return unix.IoctlSetTermios(fd, unix.TCSETS, &t) })
 }
@@ -108,6 +120,7 @@ type VT struct {
 	mode     int
 	kbMode   int
 	termios  unix.Termios
+	raw      unix.Termios
 	restored bool
 }
 
@@ -150,17 +163,28 @@ func takeOver(t terminal) (*VT, error) {
 	if v.termios, err = t.Termios(); err != nil {
 		return nil, v.fail("read the terminal settings", err)
 	}
-	raw := v.termios
-	raw.Lflag &^= unix.ICANON | unix.ECHO | unix.ECHONL | unix.ISIG | unix.IEXTEN
-	raw.Iflag &^= unix.IXON | unix.ISTRIP | unix.INLCR | unix.IGNCR
-	raw.Cc[unix.VMIN], raw.Cc[unix.VTIME] = 1, 0
-	if err := t.SetTermios(raw); err != nil {
-		return nil, v.fail("make the terminal raw", err)
-	}
-	if err := t.SetKeyboardMode(kUnicode); err != nil {
-		return nil, errors.Join(v.fail("set the keyboard to unicode", err), v.Restore())
+	v.raw = v.termios
+	v.raw.Lflag &^= unix.ICANON | unix.ECHO | unix.ECHONL | unix.ISIG | unix.IEXTEN
+	v.raw.Iflag &^= unix.IXON | unix.ISTRIP | unix.INLCR | unix.IGNCR
+	v.raw.Cc[unix.VMIN], v.raw.Cc[unix.VTIME] = 1, 0
+	if err := v.Reclaim(); err != nil {
+		return nil, errors.Join(err, v.Restore())
 	}
 	return v, nil
+}
+
+// Reclaim makes the terminal raw and the keyboard unicode again, for when
+// another process reset the VT under the splash: systemd resets the
+// console's terminal when it starts in the real root, which with the
+// console on a VT leaves the splash reading whole lines.
+func (v *VT) Reclaim() error {
+	if err := v.t.SetTermios(v.raw); err != nil {
+		return v.fail("make the terminal raw", err)
+	}
+	if err := v.t.SetKeyboardMode(kUnicode); err != nil {
+		return v.fail("set the keyboard to unicode", err)
+	}
+	return nil
 }
 
 func (v *VT) fail(what string, err error) error {
@@ -188,6 +212,15 @@ func (v *VT) Text() error {
 		return v.fail("switch to text mode", err)
 	}
 	return nil
+}
+
+// Rows is how many lines of text the VT shows.
+func (v *VT) Rows() (int, error) {
+	w, err := v.t.Winsize()
+	if err != nil {
+		return 0, v.fail("read the size", err)
+	}
+	return int(w.Row), nil
 }
 
 // Read reads keyboard input, blocking until there is some.
