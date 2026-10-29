@@ -33,6 +33,10 @@
         splash = self'.packages.default;
         kms = testBinary "kms" "internal/kms";
       };
+      vm-kms-switch = import ./vm-kms-switch.nix {
+        inherit pkgs;
+        splash = self'.packages.default;
+      };
       # The daemon end to end on a virtio-gpu VM: it lights the output and
       # takes tty1, the plymouth client and systemd's password agent talk
       # to it, a password typed on the VM's keyboard comes back, and quit
