@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"io/fs"
 	"log/slog"
+	"os"
 	"slices"
 	"time"
 
@@ -94,7 +96,11 @@ type Config struct {
 	Notify string
 	// Chroot switches into the new root, as `R` asks.
 	Chroot func(dir string) error
-	Log    *slog.Logger
+	// BootDuration is the file a boot reads the previous boot's duration
+	// from, for its progress, and records its own in once the root is
+	// writable: BootDurationFile.
+	BootDuration string
+	Log          *slog.Logger
 }
 
 type event struct {
@@ -120,6 +126,9 @@ type daemon struct {
 	inbox    chan event
 	done     chan struct{}
 	quitted  bool
+	started  time.Time
+	previous time.Duration
+	writable bool
 }
 
 // Run serves the splash until a quit request or ctx ends. ctx ending is a
@@ -143,6 +152,10 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, displ
 		inbox:    make(chan event, 16),
 		done:     make(chan struct{}),
 		state:    theme.State{Updating: cfg.Mode == Updates},
+		started:  time.Now(),
+	}
+	if cfg.Mode == Boot {
+		d.loadPrevious()
 	}
 	defer func() {
 		if !d.quitted {
@@ -168,7 +181,20 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, displ
 	if err := Notify(cfg.Notify, "READY=1"); err != nil {
 		return err
 	}
+	cfg.Log.Info("showing the splash", "mode", cfg.Mode, "pid", os.Getpid())
 	return d.loop(ctx)
+}
+
+func (d *daemon) loadPrevious() {
+	total, err := LoadBootDuration(d.cfg.BootDuration)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		d.cfg.Log.Info("no previous boot to measure progress by", "file", d.cfg.BootDuration)
+	case err != nil:
+		d.cfg.Log.Warn("showing no boot progress", "err", err)
+	default:
+		d.previous = total
+	}
 }
 
 func (d *daemon) loop(ctx context.Context) error {
@@ -199,6 +225,9 @@ func (d *daemon) loop(ctx context.Context) error {
 				continue
 			}
 			d.state.Phase = (d.state.Phase + 1) % theme.Frames
+			if d.previous > 0 {
+				d.state.Progress = bootProgress(time.Since(d.started), d.previous)
+			}
 		}
 		d.state.Prompt = d.asker.Prompt()
 		err = errors.Join(err, d.redraw())
@@ -296,6 +325,9 @@ func (d *daemon) request(c *server.Call) (func() error, error) {
 		if err := d.cfg.Chroot(r.Dir); err != nil {
 			return answer(protocol.Nak{}), fmt.Errorf("daemon: switch to the new root %s: %w", r.Dir, err)
 		}
+		if d.cfg.Mode == Boot && d.previous == 0 {
+			d.loadPrevious()
+		}
 		return answer(protocol.Ack{}), nil
 	}
 	return answer(protocol.Ack{}), d.apply(c.Request)
@@ -336,9 +368,11 @@ func (d *daemon) apply(req protocol.Request) error {
 		return d.asker.Ignore(r.Keys)
 	case protocol.Reload:
 		return d.reload()
+	case protocol.SystemInitialized:
+		d.writable = true
 	case protocol.Error:
 		d.cfg.Log.Warn("the boot reported an error")
-	case protocol.Ping, protocol.SystemInitialized, protocol.Quit, protocol.Password, protocol.Question,
+	case protocol.Ping, protocol.Quit, protocol.Password, protocol.Question,
 		protocol.CachedPassword, protocol.WatchKeystroke, protocol.HasActiveVT, protocol.NewRoot:
 	}
 	return nil
@@ -406,6 +440,9 @@ func (d *daemon) redrawText() error {
 func (d *daemon) quit(retain bool) error {
 	d.quitted = true
 	errs := []error{d.asker.Close()}
+	if d.cfg.Mode == Boot && d.writable {
+		errs = append(errs, SaveBootDuration(d.cfg.BootDuration, time.Since(d.started)))
+	}
 	if err := d.display.Close(retain); errors.Is(err, drm.ErrNoCloseFB) {
 		d.cfg.Log.Warn("this kernel has no CLOSEFB, so the splash's last frame goes away with it", "err", err)
 	} else {

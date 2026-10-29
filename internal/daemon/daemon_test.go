@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -149,24 +150,30 @@ func (v *fakeVT) how() string {
 }
 
 type run struct {
-	socket  string
-	display *fakeDisplay
-	vt      *fakeVT
-	cancel  context.CancelFunc
-	done    chan error
-	roots   chan string
+	socket   string
+	display  *fakeDisplay
+	vt       *fakeVT
+	cancel   context.CancelFunc
+	done     chan error
+	roots    chan string
+	duration string
 }
 
 type setup struct {
-	mode    Mode
-	noVT    bool
-	screens int
-	chroot  func(string) error
+	mode     Mode
+	noVT     bool
+	screens  int
+	chroot   func(string) error
+	duration string
+	log      *slog.Logger
 }
 
 func start(t *testing.T, s setup) *run {
 	t.Helper()
-	r := &run{socket: "@lys-splash-daemon-test-" + rand.Text(), display: &fakeDisplay{}, done: make(chan error, 1), roots: make(chan string, 4)}
+	r := &run{socket: "@lys-splash-daemon-test-" + rand.Text(), display: &fakeDisplay{}, done: make(chan error, 1), roots: make(chan string, 4), duration: s.duration}
+	if r.duration == "" {
+		r.duration = filepath.Join(t.TempDir(), "boot-duration")
+	}
 	for range s.screens {
 		r.display.screens = append(r.display.screens, newScreen(image.Pt(320, 240)))
 	}
@@ -184,7 +191,11 @@ func start(t *testing.T, s setup) *run {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	r.cancel = cancel
-	cfg := Config{Mode: s.mode, Socket: r.socket, Owner: uint32(os.Getuid()), Chroot: chroot, Log: slog.New(slog.DiscardHandler)}
+	log := s.log
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	cfg := Config{Mode: s.mode, Socket: r.socket, Owner: uint32(os.Getuid()), Chroot: chroot, BootDuration: r.duration, Log: log}
 	go func() { r.done <- Run(ctx, cfg, theme.Default(), nil, r.display, vt) }()
 	t.Cleanup(func() {
 		cancel()
