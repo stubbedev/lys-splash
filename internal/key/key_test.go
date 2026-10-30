@@ -46,3 +46,26 @@ func TestDecode(t *testing.T) {
 		}
 	}
 }
+
+func zero(b []byte) bool {
+	return !slices.ContainsFunc(b, func(c byte) bool { return c != 0 })
+}
+
+func TestSplitCharactersAreZeroed(t *testing.T) {
+	t.Parallel()
+	var d Decoder
+	d.Decode(nil, []byte("\xe2"))
+	kept := d.partial[:cap(d.partial)]
+	if got := d.Decode(nil, []byte("\x82\xac")); !slices.Equal(got, chars("€")) {
+		t.Fatalf("Decode = %v, want €", got)
+	}
+	if !zero(kept) {
+		t.Errorf("the joined bytes of a split character are left in memory: %x", kept)
+	}
+	d.Decode(nil, []byte("\xc3"))
+	waiting := d.partial[:cap(d.partial)]
+	d.Forget()
+	if !zero(waiting) || d.partial != nil {
+		t.Errorf("Forget left %x", waiting)
+	}
+}

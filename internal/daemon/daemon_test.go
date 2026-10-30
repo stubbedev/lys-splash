@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/stubbedev/lys-lib/drm"
 
+	"github.com/stubbedev/lys-splash/internal/key"
 	"github.com/stubbedev/lys-splash/internal/kms"
 	"github.com/stubbedev/lys-splash/internal/protocol"
 	"github.com/stubbedev/lys-splash/internal/theme"
@@ -596,5 +598,19 @@ func TestTheVTIsReclaimedOnceTheRootIsWritableAndOnReactivate(t *testing.T) {
 	r.call(t, protocol.Reactivate{}, protocol.Ack{})
 	if n, graphics := r.vt.reclaimed(); n != 2 || !graphics {
 		t.Errorf("after reactivate the VT was reclaimed %d times, graphics %v; want twice, in graphics", n, graphics)
+	}
+}
+
+func TestTypedKeysAreZeroed(t *testing.T) {
+	t.Parallel()
+	for _, inactive := range []bool{false, true} {
+		d := &daemon{inactive: inactive, display: &fakeDisplay{}}
+		keys := []key.Key{{Kind: key.Char, Rune: 's'}, {Kind: key.Enter}}
+		if err := d.typed(keys); err != nil {
+			t.Fatal(err)
+		}
+		if slices.ContainsFunc(keys, func(k key.Key) bool { return k != key.Key{} }) {
+			t.Errorf("inactive %v: the keys typed are left in memory: %v", inactive, keys)
+		}
 	}
 }

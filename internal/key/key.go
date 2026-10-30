@@ -29,7 +29,9 @@ type Key struct {
 }
 
 // Decoder turns bytes read from a terminal in non-canonical mode into keys,
-// keeping a multibyte character split across reads until it is whole.
+// keeping a multibyte character split across reads until it is whole. The
+// bytes it keeps or joins may be part of a password, so it zeroes them once
+// decoded, and Forget zeroes what it still keeps.
 type Decoder struct {
 	partial []byte
 }
@@ -50,8 +52,10 @@ const (
 // Other control characters and invalid UTF-8 are dropped.
 func (d *Decoder) Decode(keys []Key, b []byte) []Key {
 	if len(d.partial) > 0 {
-		b = append(d.partial, b...)
+		joined := append(d.partial, b...)
 		d.partial = nil
+		defer clear(joined)
+		b = joined
 	}
 	for len(b) > 0 {
 		c := b[0]
@@ -86,6 +90,13 @@ func (d *Decoder) Decode(keys []Key, b []byte) []Key {
 		b = b[1:]
 	}
 	return keys
+}
+
+// Forget zeroes and drops the start of a character still waiting for the
+// rest of its bytes.
+func (d *Decoder) Forget() {
+	clear(d.partial)
+	d.partial = nil
 }
 
 func sequenceLen(b []byte) int {

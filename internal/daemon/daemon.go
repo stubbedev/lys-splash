@@ -290,6 +290,7 @@ func (d *daemon) HangUp(c *server.Conn) {
 
 func (d *daemon) readKeys() {
 	var dec key.Decoder
+	defer dec.Forget()
 	buf := make([]byte, 256)
 	defer clear(buf)
 	for {
@@ -338,6 +339,7 @@ func (d *daemon) output(b []byte) error {
 }
 
 func (d *daemon) typed(keys []key.Key) error {
+	defer clear(keys)
 	if d.inactive {
 		return nil
 	}
