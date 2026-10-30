@@ -27,6 +27,10 @@ build:
 plymouth-client:
     nix build --no-link -L .#checks.x86_64-linux.plymouth-client
 
+# Build an initramfs-tools image with the compat output in an Ubuntu container.
+initramfs-tools image="ubuntu:24.04":
+    ./nix/initramfs-tools-check.sh {{image}}
+
 # Format every Go source in place with gofmt.
 fmt:
     gofmt -w .

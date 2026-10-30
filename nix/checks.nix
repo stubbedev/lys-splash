@@ -1,4 +1,4 @@
-{
+{self, ...}: {
   perSystem = {
     lib,
     pkgs,
@@ -20,7 +20,7 @@
           runHook postInstall
         '';
       };
-    units = pkgs.callPackage ./units.nix {splash = self'.packages.default;};
+    module = self.nixosModules.default;
   in {
     checks = {
       package = self'.packages.default;
@@ -38,9 +38,13 @@
         inherit pkgs;
         splash = self'.packages.default;
       };
-      units = import ./units-check.nix {inherit pkgs units;};
+      units = import ./units-check.nix {
+        inherit pkgs;
+        splash = self'.packages.default;
+      };
+      module = import ./module-check.nix {inherit pkgs module;};
       vm-boot = import ./vm-boot.nix {
-        inherit pkgs units;
+        inherit pkgs module;
         splash = self'.packages.default;
       };
       # The daemon end to end on a virtio-gpu VM: it lights the output and

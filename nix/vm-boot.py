@@ -82,6 +82,7 @@ with logs_on_failure(text, explained):
 with logs_on_failure(machine, explained):
     booted(machine)
     machine.succeed(f"systemd-analyze verify --man=no {units}/*")
+    machine.succeed("grep -qw splash /proc/cmdline", "grep -q 'accent: .#ffb454' /etc/lys-splash/theme.yaml")
 
     pid = machine.succeed("cat /run/plymouth/pid").strip()
     in_order(machine,

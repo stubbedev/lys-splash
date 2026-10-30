@@ -15,6 +15,54 @@ Cantarell Regular under the SIL Open Font License 1.1
 
 The implementation is tracked in the repository's issues.
 
+## Installing
+
+### NixOS
+
+Add the flake as an input and import its module:
+
+```nix
+{
+  imports = [lys-splash.nixosModules.default];
+  boot.lys-splash = {
+    enable = true;
+    theme = {throbber = "dots";};
+  };
+}
+```
+
+`boot.lys-splash.enable` puts the binary, the theme and the units into the
+systemd initrd and the system, and adds `splash` to the kernel command
+line. It cannot be combined with `boot.plymouth.enable`, which an
+assertion names. `boot.lys-splash.theme` holds `theme.yaml`'s fields;
+those left out keep the embedded theme's.
+
+### Ubuntu and Debian, in place of plymouth
+
+The `compat` output is a tree to copy under `/usr`: `bin/lys-splash`, the
+`bin/plymouth` and `sbin/plymouthd` links to it, the systemd units with
+`/usr` paths, and initramfs-tools' hook and `init-premount`,
+`init-bottom` and `panic` scripts, which do what plymouth's do under the
+same command-line rules (`splash`, `nosplash`, `plymouth.enable=0`).
+cryptsetup's initramfs scripts call `plymouth`, so they ask through the
+splash unchanged.
+
+```sh
+nix build .#default.compat
+sudo apt-get remove plymouth
+sudo cp -a --no-preserve=ownership result-compat/. /usr/
+sudo systemctl enable lys-splash-start.service lys-splash-quit.service \
+  lys-splash-quit-wait.service lys-splash-read-write.service \
+  lys-splash-ask-password.path lys-splash-reboot.service \
+  lys-splash-poweroff.service lys-splash-halt.service lys-splash-kexec.service
+sudo update-initramfs -u
+```
+
+A theme at `/etc/lys-splash/theme.yaml` goes into the image too. Run as
+`plymouthd`, the splash detaches once it is ready, as plymouthd does, and
+exits 0 when a splash is already running, so the initrd's splash carries
+on into the real root.
+
 ## Handing the screen over
 
 The kernel's fbdev emulation (`drm_kms_helper.fbdev_emulation=1`, the
@@ -80,6 +128,7 @@ still on screen.
 | `just test` | `go test ./...` |
 | `just build` | Compile-check every package |
 | `just plymouth-client` | Run nixpkgs' `plymouth` client against the server (`checks.plymouth-client`) |
+| `just initramfs-tools` | Install the compat output into an Ubuntu container, build an initramfs-tools image and check that it holds the splash, the links and the scripts (needs Docker) |
 | `just fmt` | Format every Go source in place |
 
 Every dev tool (Go toolchain pinned to the version go.mod declares, gopls,
@@ -92,9 +141,11 @@ from downloading itself.
 - `nix build` builds the package (`nix/package.nix`; the dev shell is
   `nix/shell.nix` and the checks `nix/checks.nix`, all imported by
   `flake.nix`; `vendorHash` changes with go.sum)
-- `nix flake check` runs the checks, among them `plymouth-client` and
-  `vm-kms`, a NixOS VM whose only card is vkms that runs the kms
-  package's real-card test as root
+- `nix flake check` runs the checks, among them `plymouth-client`,
+  `module`, which evaluates the NixOS module and looks for the splash in
+  its initrd, `vm-kms`, a NixOS VM whose only card is vkms that runs the
+  kms package's real-card test as root, and `vm-boot`, which boots through
+  the module
 - `nix run` runs it
 - `nix fmt` formats the nix files with alejandra
 

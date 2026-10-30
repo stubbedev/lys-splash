@@ -3,10 +3,10 @@
 # /run, so vm-boot runs it.
 {
   pkgs,
-  units,
+  splash,
 }:
 pkgs.runCommand "lys-splash-units-check" {} ''
-  for unit in ${units.package}/lib/systemd/system/*; do
+  for unit in ${splash}/lib/systemd/system/* ${splash.compat}/lib/systemd/system/*; do
     name=$(basename "$unit")
     case $name in
       lys-splash-ask-password.*) counterpart=systemd-ask-password-plymouth.''${name##*.} ;;

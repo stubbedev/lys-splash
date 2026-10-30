@@ -20,6 +20,7 @@
         ./nix/package.nix
         ./nix/shell.nix
         ./nix/checks.nix
+        ./nix/module.nix
       ];
     };
 }

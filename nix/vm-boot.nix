@@ -1,4 +1,4 @@
-# A NixOS boot through lys-splash's units, on two VMs at once.
+# A NixOS boot through lys-splash's NixOS module, on two VMs at once.
 #
 # machine, on virtio-gpu with the German de-latin1 console keymap: the units pass
 # systemd-analyze verify and run in plymouth's order, which the journal
@@ -21,30 +21,21 @@
 {
   pkgs,
   splash,
-  units,
+  module,
 }: let
   inherit (pkgs) lib;
   plymouthLink = pkgs.runCommand "lys-splash-plymouth-link" {} ''
     mkdir -p $out/bin
     ln -s ${lib.getExe splash} $out/bin/plymouth
   '';
-  enable = kind: only:
-    lib.listToAttrs (map (name: lib.nameValuePair (lib.removeSuffix ".${kind}" name) {wantedBy = units.wantedBy name;})
-      (builtins.filter (name: lib.hasSuffix ".${kind}" name && (only == null || builtins.elem name only)) units.names));
-  splashUnits = {config, ...}: {
-    boot.initrd.systemd = {
-      packages = [units.package];
-      storePaths = [
-        (lib.getExe splash)
-        (lib.getExe' config.systemd.package "systemd-tty-ask-password-agent")
-      ];
-      services = enable "service" ["lys-splash-start.service" "lys-splash-switch-root.service"];
-      paths = enable "path" null;
+  splashModule = {
+    imports = [module];
+    boot.lys-splash = {
+      enable = true;
+      package = splash;
+      theme.accent = "#ffb454";
     };
-    systemd.packages = [units.package];
-    systemd.services = enable "service" null;
-    systemd.paths = enable "path" null;
-    environment.systemPackages = [splash plymouthLink];
+    environment.systemPackages = [plymouthLink];
   };
   quitByTest = {
     systemd.services.lys-splash-quit.wantedBy = lib.mkForce [];
@@ -76,7 +67,7 @@ in
     enableOCR = true;
     extraPythonPackages = p: [p.pillow];
     nodes.machine = {
-      imports = [splashUnits greeter];
+      imports = [splashModule greeter];
       virtualisation.qemu.options = ["-vga none" "-device virtio-gpu-pci" "-action shutdown=pause"];
       boot.initrd.kernelModules = ["virtio_gpu"];
       virtualisation.qemu.virtioKeyboard = false;
@@ -84,13 +75,13 @@ in
       systemd.services.lys-splash-reboot.serviceConfig.StandardError = "file:/dev/kmsg";
     };
     nodes.text = {
-      imports = [splashUnits quitByTest];
+      imports = [splashModule quitByTest];
       virtualisation.graphics = false;
       virtualisation.qemu.options = ["-vga none"];
     };
     testScript =
       ''
-        units = "${units.package}/lib/systemd/system"
+        units = "${splash}/lib/systemd/system"
       ''
       + builtins.readFile ./screens.py
       + builtins.readFile ./vm-boot.py;

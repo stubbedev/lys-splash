@@ -1,0 +1,28 @@
+#!/bin/sh
+
+PREREQ=""
+
+prereqs()
+{
+	echo "${PREREQ}"
+}
+
+case "${1}" in
+	prereqs)
+		prereqs
+		exit 0
+		;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+copy_exec /usr/bin/lys-splash
+mkdir -p "${DESTDIR}/usr/bin" "${DESTDIR}/usr/sbin"
+ln -sf lys-splash "${DESTDIR}/usr/bin/plymouth"
+ln -sf ../bin/lys-splash "${DESTDIR}/usr/sbin/plymouthd"
+
+if [ -r /etc/lys-splash/theme.yaml ]
+then
+	mkdir -p "${DESTDIR}/etc/lys-splash"
+	cp /etc/lys-splash/theme.yaml "${DESTDIR}/etc/lys-splash/"
+fi
