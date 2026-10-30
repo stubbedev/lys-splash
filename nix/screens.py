@@ -1,5 +1,6 @@
 import contextlib
 import time
+from datetime import timedelta
 
 from PIL import Image, ImageChops
 
@@ -14,6 +15,14 @@ def logs_on_failure(machine, command=splash_logs):
         _, logs = machine.execute(f"{{ {command}; }} 2>&1")
         print(f"--- {command}\n{logs}")
         raise
+
+
+def seconds(n):
+    return timedelta(seconds=n)
+
+
+def top_half(img):
+    return img.crop((0, 0, img.width, img.height // 2))
 
 
 def load(path):

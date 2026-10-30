@@ -84,5 +84,6 @@ in
         units = "${splash}/lib/systemd/system"
       ''
       + builtins.readFile ./screens.py
+      + builtins.readFile ./stages.py
       + builtins.readFile ./vm-boot.py;
   }

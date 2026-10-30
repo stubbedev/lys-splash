@@ -1,38 +1,3 @@
-import json
-import re
-from datetime import timedelta
-
-
-def seconds(n):
-    return timedelta(seconds=n)
-
-
-def journal(m):
-    out = m.succeed("journalctl -b --no-pager -o json --output-fields=MESSAGE,UNIT,_SYSTEMD_UNIT")
-    entries = []
-    for line in filter(None, out.split("\n")):
-        e = json.loads(line)
-        msg = e.get("MESSAGE") or ""
-        if isinstance(msg, list):
-            msg = bytes(msg).decode(errors="replace")
-        entries.append((int(e["__MONOTONIC_TIMESTAMP"]), e.get("UNIT") or e.get("_SYSTEMD_UNIT") or "", msg))
-    return entries
-
-
-def when(entries, unit, pattern):
-    for t, u, msg in entries:
-        if (unit is None or u == unit) and re.search(pattern, msg):
-            return t
-    raise AssertionError(f"the journal has no {pattern!r}" + (f" from {unit}" if unit else ""))
-
-
-def in_order(m, *steps):
-    entries = journal(m)
-    times = [when(entries, unit, pattern) for unit, pattern in steps]
-    for i in range(1, len(steps)):
-        assert times[i - 1] < times[i], f"{steps[i]} at {times[i]}us came before {steps[i - 1]} at {times[i - 1]}us"
-
-
 def booted(m):
     m.wait_for_unit("lys-splash-read-write.service", timeout=seconds(90))
     m.wait_until_succeeds("systemctl show -P ActiveState lys-splash-quit-wait | grep -qx activating", timeout=seconds(30))
@@ -51,10 +16,6 @@ def ask(m, prompt, keys):
 def recorded_duration(m):
     duration = float(m.succeed("cat /var/lib/lys-splash/boot-duration"))
     assert duration > 0, f"{m.name} recorded a boot of {duration}s"
-
-
-def top_half(img):
-    return img.crop((0, 0, img.width, img.height // 2))
 
 
 explained = "journalctl -b --no-pager -o short-monotonic -u 'lys-splash*' -u 'ask-*' -u greeter; echo '--- tty1'; tr -s ' ' < /dev/vcs1"
@@ -131,13 +92,7 @@ with logs_on_failure(machine, explained):
     machine.succeed("systemctl stop greeter")
 
 try:
-    machine.execute("systemctl --no-block reboot")
-    machine.wait_for_console_text(r'msg="showing the splash" mode=reboot', timeout=seconds(30))
-    machine.wait_for_console_text(r"reboot: Restarting system", timeout=seconds(60))
-    await_until(10, lambda: (None, None if "paused" in machine.send_monitor_command("info status") else "the VM has not paused at the reset"))
-    rebooting = screenshot(machine, "rebooting")
-    assert_same(top_half(rebooting), top_half(splash), "the frame at the reset against the splash's top half")
-    assert "msg=quitting mode=reboot" not in machine.get_console_log(), "the reboot splash quit before the reset"
+    reboot_shows_splash(machine, splash)
 except BaseException:
     print("--- machine's console\n" + machine.get_console_log()[-30000:])
     raise
