@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Gates (vet, lint, test, build)
+        run: nix develop -c just check
+      - name: Package, units, NixOS module and plymouth's client
+        run: nix build -L . .#checks.x86_64-linux.units .#checks.x86_64-linux.module .#checks.x86_64-linux.plymouth-client
+
+  initramfs-tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: An initramfs-tools image in Ubuntu holds the splash
+        run: ./nix/initramfs-tools-check.sh
+
+  vm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: NixOS VMs from a LUKS boot to lys-login's greeter and back down
+        run: nix build -L .#checks.x86_64-linux.vm-e2e .#checks.x86_64-linux.vm-greeter .#checks.x86_64-linux.vm-boot

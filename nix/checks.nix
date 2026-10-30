@@ -51,6 +51,11 @@
         inherit pkgs module;
         splash = self'.packages.default;
       };
+      vm-e2e = import ./vm-e2e.nix {
+        inherit pkgs module;
+        inherit (inputs) lys-login lys-wm;
+        splash = self'.packages.default;
+      };
       vm-greeter = import ./vm-greeter.nix {
         inherit pkgs module;
         inherit (inputs) lys-login lys-wm;

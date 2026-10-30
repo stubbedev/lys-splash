@@ -145,12 +145,22 @@ from downloading itself.
   `module`, which evaluates the NixOS module and looks for the splash in
   its initrd, `vm-kms`, a NixOS VM whose only card is vkms that runs the
   kms package's real-card test as root, `vm-boot`, which boots through
-  the module, and `vm-greeter`, which hands the splash's frame to
-  lys-login's greeter on lys-wm and checks every screen dump on the way
+  the module, `vm-greeter`, which hands the splash's frame to lys-login's
+  greeter on lys-wm and checks every screen dump on the way, and `vm-e2e`,
+  the whole path in one test: OVMF and simpledrm, then virtio-gpu, a LUKS
+  root and a second LUKS disk unlocked by one passphrase typed at the
+  splash, the splash surviving the switch to the real root, nixpkgs'
+  plymouth client, the hand-over to the greeter, the reboot splash, and a
+  machine without a display typing its passphrase at the text fallback;
+  each stage fails with its name
 - `nix run` runs it
 - `nix fmt` formats the nix files with alejandra
 
 ## CI
+
+`.github/workflows/ci.yml` runs the gates, the package, unit and module
+checks, the initramfs-tools image in Ubuntu, and the VM checks `vm-e2e`,
+`vm-greeter` and `vm-boot` under KVM.
 
 `.github/workflows/security.yml` runs CodeQL (Go and GitHub Actions), Grype and
 govulncheck, uploading findings to code scanning; dependency review gates
