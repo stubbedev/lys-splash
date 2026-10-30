@@ -39,23 +39,23 @@ func placeholder(size image.Point) bool {
 	return false
 }
 
-// Scaler chooses each output's scale as plymouth does, remembering when a
-// firmware framebuffer forced it to guess so that the native driver's
-// outputs keep the guessed scale and the picture does not jump.
+// Scaler chooses each output's scale as plymouth does, except that once a
+// firmware framebuffer forced a guess, the native driver's outputs keep the
+// guessed value even when their mode differs, so the picture does not jump.
 type Scaler struct {
-	guessing bool
+	guessed int
 }
 
 // Scale is the scale of an output showing size pixels on a display of mm
 // millimetres, as the connector reports it from EDID. A firmware framebuffer
-// that does not know its display's size makes this and every later choice a
-// guess from the resolution alone.
+// that does not know its display's size guesses from the resolution alone,
+// and every later output takes the firmware's guess.
 func (s *Scaler) Scale(size image.Point, mm [2]uint32, firmware bool) int {
-	if firmware && !knowsSize(size, mm) {
-		s.guessing = true
+	if firmware && (s.guessed > 0 || !knowsSize(size, mm)) {
+		s.guessed = guessScale(size)
 	}
-	if s.guessing {
-		return guessScale(size)
+	if s.guessed > 0 {
+		return s.guessed
 	}
 	return physicalScale(size, mm)
 }

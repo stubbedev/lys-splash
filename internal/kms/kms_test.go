@@ -92,11 +92,29 @@ func TestFirmwareGuessKeepsTheScale(t *testing.T) {
 		t.Errorf("the native driver without a guess chose %d, want 1", got)
 	}
 	var known Scaler
-	if got := known.Scale(image.Pt(2560, 1600), [2]uint32{286, 179}, true); got != 2 || known.guessing {
-		t.Errorf("simpledrm knowing its size chose %d (guessing %v), want 2 from the size", got, known.guessing)
+	if got := known.Scale(image.Pt(2560, 1600), [2]uint32{286, 179}, true); got != 2 || known.guessed != 0 {
+		t.Errorf("simpledrm knowing its size chose %d (guessed %d), want 2 from the size", got, known.guessed)
 	}
 	if got := s.Scale(image.Pt(3000, 2000), [2]uint32{0, 0}, false); got != 2 {
 		t.Errorf("a 3:2 guess chose %d, want 2", got)
+	}
+}
+
+func TestFirmwareGuessKeepsTheValueAcrossAModeChange(t *testing.T) {
+	t.Parallel()
+	var s Scaler
+	if got := s.Scale(image.Pt(1280, 800), [2]uint32{339, 212}, true); got != 1 {
+		t.Fatalf("simpledrm at 1280x800 guessed scale %d, want 1", got)
+	}
+	if got := s.Scale(image.Pt(1800, 1200), [2]uint32{457, 305}, false); got != 1 {
+		t.Errorf("the native driver at 1800x1200 chose %d, want simpledrm's 1", got)
+	}
+	var hidpi Scaler
+	if got := hidpi.Scale(image.Pt(3840, 2160), [2]uint32{1015, 571}, true); got != 2 {
+		t.Fatalf("simpledrm at 3840x2160 guessed scale %d, want 2", got)
+	}
+	if got := hidpi.Scale(image.Pt(1920, 1080), [2]uint32{0, 0}, false); got != 2 {
+		t.Errorf("the native driver at 1920x1080 chose %d, want simpledrm's 2", got)
 	}
 }
 
@@ -594,18 +612,13 @@ func fakeDisplay(t *testing.T, devs map[string]*fakeDevice, drivers map[string]s
 	return disp, paths
 }
 
-func TestDisplayFollowsTheDriverSwitch(t *testing.T) {
-	t.Parallel()
-	simple := newFakeDevice("/dev/dri/card0", 1)
-	simple.connect(40, [2]uint32{1015, 571}, mode(3840, 2160, true))
-	simple.light(40, 10, mode(3840, 2160, true))
-	native := newFakeDevice("/dev/dri/card1", 1)
-	native.connect(41, [2]uint32{1428, 803}, mode(3840, 2160, true))
+func switchDrivers(t *testing.T, simple, native *fakeDevice, firmwareScale int) *Display {
+	t.Helper()
 	devs := map[string]*fakeDevice{"card0": simple}
 	disp, paths := fakeDisplay(t, devs, map[string]string{"card0": "simple-framebuffer"})
 	outs := disp.Outputs()
-	if len(outs) != 1 || outs[0].Scale() != 2 || !outs[0].card.firmware {
-		t.Fatalf("outputs on simpledrm: %v", outs)
+	if len(outs) != 1 || outs[0].Scale() != firmwareScale || !outs[0].card.firmware {
+		t.Fatalf("outputs on simpledrm: %v, want one at scale %d", outs, firmwareScale)
 	}
 	remove := "remove@/devices/platform/simple-framebuffer.0/drm/card0\x00ACTION=remove\x00SUBSYSTEM=drm\x00DEVNAME=dri/card0\x00"
 	if err := disp.Handle(Event{uevent: []byte(remove)}); err != nil {
@@ -622,7 +635,18 @@ func TestDisplayFollowsTheDriverSwitch(t *testing.T) {
 	if err := disp.Handle(Event{uevent: []byte(add)}); err != nil {
 		t.Fatal(err)
 	}
-	outs = disp.Outputs()
+	return disp
+}
+
+func TestDisplayFollowsTheDriverSwitch(t *testing.T) {
+	t.Parallel()
+	simple := newFakeDevice("/dev/dri/card0", 1)
+	simple.connect(40, [2]uint32{1015, 571}, mode(3840, 2160, true))
+	simple.light(40, 10, mode(3840, 2160, true))
+	native := newFakeDevice("/dev/dri/card1", 1)
+	native.connect(41, [2]uint32{1428, 803}, mode(3840, 2160, true))
+	disp := switchDrivers(t, simple, native, 2)
+	outs := disp.Outputs()
 	if len(outs) != 1 || outs[0].card.firmware || outs[0].Scale() != 2 {
 		t.Fatalf("outputs on the native driver: %v, want one at simpledrm's scale 2", outs)
 	}
@@ -634,6 +658,23 @@ func TestDisplayFollowsTheDriverSwitch(t *testing.T) {
 	}
 	if !native.closed {
 		t.Error("Close left the native card open")
+	}
+}
+
+func TestDriverSwitchToAnotherModeKeepsTheScale(t *testing.T) {
+	t.Parallel()
+	simple := newFakeDevice("/dev/dri/card0", 1)
+	simple.connect(40, [2]uint32{339, 212}, mode(1280, 800, true))
+	simple.light(40, 10, mode(1280, 800, true))
+	native := newFakeDevice("/dev/dri/card1", 1)
+	native.connect(41, [2]uint32{457, 305}, mode(1800, 1200, true), mode(1280, 800, false))
+	disp := switchDrivers(t, simple, native, 1)
+	outs := disp.Outputs()
+	if len(outs) != 1 || outs[0].Frame().Size != image.Pt(1800, 1200) || outs[0].Scale() != 1 {
+		t.Fatalf("outputs on the native driver: %v, want one at 1800x1200 with simpledrm's scale 1", outs)
+	}
+	if err := disp.Close(false); err != nil {
+		t.Fatal(err)
 	}
 }
 
