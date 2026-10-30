@@ -21,6 +21,7 @@ import (
 	"github.com/stubbedev/lys-splash/internal/key"
 	"github.com/stubbedev/lys-splash/internal/kms"
 	"github.com/stubbedev/lys-splash/internal/protocol"
+	"github.com/stubbedev/lys-splash/internal/server"
 	"github.com/stubbedev/lys-splash/internal/theme"
 )
 
@@ -179,6 +180,15 @@ type run struct {
 	console  *fakeConsole
 }
 
+func listen(t *testing.T, socket string) *server.Server {
+	t.Helper()
+	srv, err := server.Listen(socket, uint32(os.Getuid()), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv
+}
+
 type setup struct {
 	mode     Mode
 	noVT     bool
@@ -215,7 +225,7 @@ func start(t *testing.T, s setup) *run {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	cfg := Config{Mode: s.mode, Socket: r.socket, Owner: uint32(os.Getuid()), Chroot: chroot, BootDuration: r.duration, Log: log}
+	cfg := Config{Mode: s.mode, Server: listen(t, r.socket), Chroot: chroot, BootDuration: r.duration, Log: log}
 	go func() {
 		r.done <- Run(ctx, cfg, theme.Default(), nil, Devices{Display: r.display, VT: vt, Console: r.console})
 	}()
@@ -474,7 +484,7 @@ func TestPanicRestoresTheVT(t *testing.T) {
 	display.screens = []Screen{newScreen(image.Pt(64, 64))}
 	vt := newVT()
 	socket := "@lys-splash-daemon-test-" + rand.Text()
-	cfg := Config{Socket: socket, Owner: uint32(os.Getuid()), Chroot: func(string) error { return nil }, Log: slog.New(slog.DiscardHandler)}
+	cfg := Config{Server: listen(t, socket), Chroot: func(string) error { return nil }, Log: slog.New(slog.DiscardHandler)}
 	panicked := make(chan any, 1)
 	go func() {
 		defer func() { panicked <- recover() }()
@@ -507,20 +517,6 @@ func TestPanicRestoresTheVT(t *testing.T) {
 	}
 	if vt.how() != "restore" || !display.closed || display.retained {
 		t.Errorf("after a panic: VT %q, display closed %v retained %v", vt.how(), display.closed, display.retained)
-	}
-}
-
-func TestListenFailureGivesTheVTBack(t *testing.T) {
-	t.Parallel()
-	r := start(t, setup{screens: 1})
-	vt := newVT()
-	display := &fakeDisplay{}
-	cfg := Config{Socket: r.socket, Owner: uint32(os.Getuid()), Log: slog.New(slog.DiscardHandler)}
-	if err := Run(t.Context(), cfg, theme.Default(), nil, Devices{Display: display, VT: vt}); err == nil {
-		t.Fatal("Run on a taken socket succeeded")
-	}
-	if vt.how() != "restore" || !display.closed {
-		t.Errorf("a failed start left VT %q, display closed %v", vt.how(), display.closed)
 	}
 }
 

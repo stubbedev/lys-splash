@@ -46,12 +46,12 @@ func ack(protocol.Request) protocol.Response { return protocol.Ack{} }
 func serve(t *testing.T, d *daemon) (string, *server.Server) {
 	t.Helper()
 	name := "@lys-splash-client-test-" + rand.Text()
-	s, err := server.Listen(name, uint32(os.Getuid()), d, slog.New(slog.DiscardHandler))
+	s, err := server.Listen(name, uint32(os.Getuid()), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- s.Serve() }()
+	go func() { done <- s.Serve(d) }()
 	t.Cleanup(func() {
 		if err := s.Close(); err != nil {
 			t.Error(err)

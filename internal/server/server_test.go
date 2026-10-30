@@ -80,12 +80,12 @@ func ackAll(c *Call) (protocol.Response, bool) {
 func serve(t *testing.T, name string, owner uint32, answer func(*Call) (protocol.Response, bool)) *recorder {
 	t.Helper()
 	r := &recorder{events: make(chan event, 16), answer: answer}
-	s, err := Listen(name, owner, r, slog.New(slog.DiscardHandler))
+	s, err := Listen(name, owner, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- s.Serve() }()
+	go func() { done <- s.Serve(r) }()
 	t.Cleanup(func() {
 		if err := s.Close(); err != nil {
 			t.Error(err)
@@ -257,12 +257,12 @@ func TestCloseHangsUpPendingConnections(t *testing.T) {
 	t.Parallel()
 	name := socketName()
 	r := &recorder{events: make(chan event, 4), answer: ackAll}
-	s, err := Listen(name, uid(), r, slog.New(slog.DiscardHandler))
+	s, err := Listen(name, uid(), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- s.Serve() }()
+	go func() { done <- s.Serve(r) }()
 	c := dial(t, name)
 	send(t, c, "*\x00")
 	r.request(t)
@@ -282,8 +282,8 @@ func TestListenTwiceFails(t *testing.T) {
 	t.Parallel()
 	name := socketName()
 	serve(t, name, uid(), ackAll)
-	if _, err := Listen(name, uid(), &recorder{}, slog.New(slog.DiscardHandler)); err == nil {
-		t.Error("a second Listen on the same name succeeded")
+	if _, err := Listen(name, uid(), slog.New(slog.DiscardHandler)); !errors.Is(err, ErrRunning) {
+		t.Errorf("a second Listen on the same name = %v, want ErrRunning", err)
 	}
 }
 

@@ -1,8 +1,12 @@
 package main
 
 import (
+	"crypto/rand"
 	"io"
+	"log/slog"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/stubbedev/lys-splash/internal/daemon"
 )
@@ -47,5 +51,34 @@ func TestParseOptions(t *testing.T) {
 		if _, err := parseOptions("lys-splash", args, io.Discard); err == nil {
 			t.Errorf("parseOptions(%q) succeeded", args)
 		}
+	}
+}
+
+func TestListenWithADaemonRunningReportsReady(t *testing.T) {
+	t.Parallel()
+	quiet := slog.New(slog.DiscardHandler)
+	socket := "@lys-splash-main-test-" + rand.Text()
+	addr := "@lys-splash-main-notify-" + rand.Text()
+	ready, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: addr, Net: "unixgram"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ready.Close()
+	first, err := listen(socket, addr, quiet)
+	if err != nil || first == nil {
+		t.Fatalf("the first daemon's listen = %v, %v", first, err)
+	}
+	defer first.Close()
+	second, err := listen(socket, addr, quiet)
+	if err != nil || second != nil {
+		t.Fatalf("the second daemon's listen = %v, %v; want no server and no error", second, err)
+	}
+	if err := ready.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 64)
+	n, err := ready.Read(buf)
+	if err != nil || string(buf[:n]) != "READY=1" {
+		t.Errorf("the second daemon notified %q, %v; want READY=1", buf[:n], err)
 	}
 }

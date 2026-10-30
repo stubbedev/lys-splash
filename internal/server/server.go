@@ -20,6 +20,10 @@ import (
 
 const writeTimeout = 5 * time.Second
 
+// ErrRunning is what Listen fails with when another daemon already listens
+// on the socket.
+var ErrRunning = errors.New("server: another daemon is already listening")
+
 // Peer is the process at the other end of a connection, as SO_PEERCRED
 // reports it when the connection is accepted.
 type Peer struct {
@@ -128,18 +132,25 @@ type Server struct {
 }
 
 // Listen listens on the Unix socket name, "@" leading an abstract one as in
-// net.Listen. Only requests from processes running as uid owner reach h;
-// every other peer is answered NAK, as plymouthd answers non-root peers.
-func Listen(name string, owner uint32, h Handler, log *slog.Logger) (*Server, error) {
+// net.Listen. Only requests from processes running as uid owner reach the
+// handler Serve is given; every other peer is answered NAK, as plymouthd
+// answers non-root peers. A name another process listens on fails with
+// ErrRunning.
+func Listen(name string, owner uint32, log *slog.Logger) (*Server, error) {
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: name, Net: "unix"})
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return nil, fmt.Errorf("%w on %s: %w", ErrRunning, name, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("server: listen on %s: %w", name, err)
 	}
-	return &Server{ln: ln, owner: owner, handler: h, log: log, conns: map[*Conn]struct{}{}}, nil
+	return &Server{ln: ln, owner: owner, log: log, conns: map[*Conn]struct{}{}}, nil
 }
 
-// Serve accepts connections until Close, then returns nil.
-func (s *Server) Serve() error {
+// Serve hands every request to h and accepts connections until Close, then
+// returns nil.
+func (s *Server) Serve(h Handler) error {
+	s.handler = h
 	for {
 		c, err := s.ln.AcceptUnix()
 		if errors.Is(err, net.ErrClosed) {

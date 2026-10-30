@@ -109,10 +109,9 @@ type Config struct {
 	Mode Mode
 	// ThemePath is the theme.yaml that Reload reads again.
 	ThemePath string
-	// Socket and Owner are where the protocol is served and which uid may
-	// use it: protocol.SocketName and root.
-	Socket string
-	Owner  uint32
+	// Server is where the protocol is served, listening already; Run
+	// serves it and closes it.
+	Server *server.Server
 	// Notify is the systemd notify socket, empty without a supervisor.
 	Notify string
 	// Chroot switches into the new root, as `R` asks.
@@ -164,7 +163,7 @@ type daemon struct {
 func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, dev Devices) (err error) {
 	r, err := theme.NewRenderer(t, bgrt)
 	if err != nil {
-		return err
+		return errors.Join(err, cfg.Server.Close())
 	}
 	d := &daemon{
 		cfg:      cfg,
@@ -188,15 +187,11 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, dev D
 			err = errors.Join(err, d.quit(false))
 		}
 	}()
-	srv, err := server.Listen(cfg.Socket, cfg.Owner, d, cfg.Log)
-	if err != nil {
-		return err
-	}
 	served := make(chan error, 1)
-	go func() { served <- srv.Serve() }()
+	go func() { served <- cfg.Server.Serve(d) }()
 	defer func() {
 		close(d.done)
-		err = errors.Join(err, srv.Close(), <-served)
+		err = errors.Join(err, cfg.Server.Close(), <-served)
 	}()
 	if d.vt != nil {
 		go d.readKeys()

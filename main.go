@@ -29,6 +29,7 @@ import (
 	"github.com/stubbedev/lys-splash/internal/daemon"
 	"github.com/stubbedev/lys-splash/internal/kms"
 	"github.com/stubbedev/lys-splash/internal/protocol"
+	"github.com/stubbedev/lys-splash/internal/server"
 	"github.com/stubbedev/lys-splash/internal/theme"
 )
 
@@ -200,7 +201,24 @@ func writePid(path string) error {
 	return atomicfile.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644)
 }
 
+// listen takes the protocol's socket. With another daemon listening it
+// reports ready to notify and returns no server, as plymouthd exits 0 when
+// one is already running.
+func listen(socket, notify string, log *slog.Logger) (*server.Server, error) {
+	srv, err := server.Listen(socket, 0, log)
+	if errors.Is(err, server.ErrRunning) {
+		log.Info("a splash is already running", "socket", socket)
+		return nil, daemon.Notify(notify, "READY=1")
+	}
+	return srv, err
+}
+
 func serve(o options, log *slog.Logger) (err error) {
+	notify := os.Getenv(daemon.NotifyEnv)
+	srv, err := listen(protocol.SocketName, notify, log)
+	if srv == nil {
+		return err
+	}
 	t, err := theme.Load(o.theme)
 	if err != nil {
 		log.Warn("falling back to the default theme", "err", err)
@@ -226,6 +244,7 @@ func serve(o options, log *slog.Logger) (err error) {
 	}
 	display, err := kms.Open(kms.SystemPaths, log)
 	if err != nil {
+		err = errors.Join(err, srv.Close())
 		if vt != nil {
 			err = errors.Join(err, vt.Restore())
 		}
@@ -250,8 +269,8 @@ func serve(o options, log *slog.Logger) (err error) {
 	cfg := daemon.Config{
 		Mode:         o.mode,
 		ThemePath:    o.theme,
-		Socket:       protocol.SocketName,
-		Notify:       os.Getenv(daemon.NotifyEnv),
+		Server:       srv,
+		Notify:       notify,
 		Chroot:       daemon.SwitchRoot,
 		BootDuration: daemon.BootDurationFile,
 		Log:          log,
