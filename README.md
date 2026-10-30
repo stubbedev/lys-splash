@@ -35,6 +35,24 @@ close is never the last one:
    `CLOSEFB` and exits; the compositor's fd keeps the card open, so
    nothing restores the console.
 
+A display manager follows that order through this contract, as GDM does
+with plymouth:
+
+- Its unit has `After=lys-splash-start.service getty@tty1.service
+  lys-splash-quit.service` and `Conflicts=lys-splash-quit.service
+  getty@tty1.service`, so systemd neither quits the splash nor puts tty1
+  back into text mode under it.
+- Before it starts its compositor it runs `lys-splash deactivate`
+  (`ExecStartPre=-lys-splash deactivate`; without a splash the call fails
+  and is ignored).
+- Once its first frame has been presented (`wp_presentation` feedback), it
+  runs `lys-splash quit --retain-splash`.
+
+lys-login's greeter, on lys-wm, which keeps an inherited frame without a
+modeset, implements it. With no display manager, `lys-splash-quit.service`
+quits the splash at the end of the boot without retain, and the console
+comes back with the boot messages the splash captured.
+
 Neither of the alternatives is used, and the NixOS module leaves fbdev
 emulation on: turning it off removes the kernel console from every
 card, and parking the card fds in systemd's fd store keeps the card open

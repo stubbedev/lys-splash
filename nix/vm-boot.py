@@ -10,7 +10,7 @@ def seconds(n):
 def journal(m):
     out = m.succeed("journalctl -b --no-pager -o json --output-fields=MESSAGE,UNIT,_SYSTEMD_UNIT")
     entries = []
-    for line in out.splitlines():
+    for line in filter(None, out.split("\n")):
         e = json.loads(line)
         msg = e.get("MESSAGE") or ""
         if isinstance(msg, list):
@@ -57,7 +57,7 @@ def top_half(img):
     return img.crop((0, 0, img.width, img.height // 2))
 
 
-explained = "journalctl -b --no-pager -o short-monotonic -u 'lys-splash*' -u 'ask-*' -u next-master; echo '--- tty1'; tr -s ' ' < /dev/vcs1"
+explained = "journalctl -b --no-pager -o short-monotonic -u 'lys-splash*' -u 'ask-*' -u greeter; echo '--- tty1'; tr -s ' ' < /dev/vcs1"
 
 start_all()
 
@@ -110,10 +110,11 @@ with logs_on_failure(machine, explained):
     machine.succeed("lys-splash pause-progress")
     machine.sleep(1)
     paused = screenshot(machine, "paused")
-    machine.succeed("lys-splash deactivate")
-    machine.succeed("systemd-run --no-ask-password --unit=next-master sh -c 'exec 3<>/dev/dri/card0; exec /run/current-system/sw/bin/sleep infinity'")
-    machine.wait_until_succeeds("ls -l /proc/$(systemctl show -P MainPID next-master)/fd | grep -q dri/card0", timeout=seconds(5))
-    machine.succeed("lys-splash quit --retain-splash")
+    for unit in ("lys-splash-quit", "getty@tty1"):
+        state = machine.succeed(f"systemctl show -P ActiveState {unit}").strip()
+        assert state == "inactive", f"{unit} is {state} under the greeter"
+    machine.succeed("touch /run/greeter-go")
+    machine.wait_for_unit("greeter.service", timeout=seconds(10))
     machine.wait_until_fails(f"kill -0 {pid}", timeout=seconds(5))
     machine.wait_for_unit("lys-splash-quit-wait.service", timeout=seconds(10))
     machine.sleep(1)
@@ -122,7 +123,11 @@ with logs_on_failure(machine, explained):
         ("lys-splash-read-write.service", r"^Finished "),
         ("lys-splash-quit-wait.service", r"^Finished "))
     recorded_duration(machine)
-    machine.succeed("systemctl stop next-master")
+    in_order(machine,
+        ("lys-splash-start.service", r'msg="showing the splash again"'),
+        ("lys-splash-start.service", r"msg=quitting mode=boot retain=true"),
+        ("greeter.service", r"^Started "))
+    machine.succeed("systemctl stop greeter")
 
 try:
     machine.execute("systemctl --no-block reboot")
