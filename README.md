@@ -15,6 +15,34 @@ Cantarell Regular under the SIL Open Font License 1.1
 
 The implementation is tracked in the repository's issues.
 
+## Handing the screen over
+
+The kernel's fbdev emulation (`drm_kms_helper.fbdev_emulation=1`, the
+default) restores its console's framebuffer with a full modeset whenever
+the last open file of a card closes (`drm_lastclose` →
+`drm_client_dev_restore`). Closing the splash's framebuffer with
+`CLOSEFB` does not prevent it: if lys-splash holds the last fd on a card
+when it exits, the console's frame replaces the splash's before the next
+compositor opens the card.
+
+lys-splash therefore hands over in plymouth's and GDM's order, so its
+close is never the last one:
+
+1. `lys-splash deactivate` drops DRM master on every card and keeps the
+   cards open, with the frame on screen.
+2. The compositor opens the cards and takes master without a modeset.
+3. `lys-splash quit --retain-splash` closes the splash's framebuffers with
+   `CLOSEFB` and exits; the compositor's fd keeps the card open, so
+   nothing restores the console.
+
+Neither of the alternatives is used, and the NixOS module leaves fbdev
+emulation on: turning it off removes the kernel console from every
+card, and parking the card fds in systemd's fd store keeps the card open
+after the compositor exits, so the console would never come back. The
+shutdown, reboot and kexec splashes never close their cards: systemd
+spares them (argv[0] starts with `@`) and the power goes with their frame
+still on screen.
+
 ## Layout
 
 | Package | What it is |
