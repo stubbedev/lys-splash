@@ -7,6 +7,17 @@
       url = "github:hercules-ci/flake-parts";
       inputs.nixpkgs-lib.follows = "nixpkgs";
     };
+    lys-wm = {
+      url = "github:stubbedev/lys-wm";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-parts.follows = "flake-parts";
+    };
+    lys-login = {
+      url = "github:stubbedev/lys-login";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-parts.follows = "flake-parts";
+      inputs.lys-wm.follows = "lys-wm";
+    };
   };
 
   outputs = inputs @ {

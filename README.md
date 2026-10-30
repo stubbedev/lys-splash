@@ -144,8 +144,9 @@ from downloading itself.
 - `nix flake check` runs the checks, among them `plymouth-client`,
   `module`, which evaluates the NixOS module and looks for the splash in
   its initrd, `vm-kms`, a NixOS VM whose only card is vkms that runs the
-  kms package's real-card test as root, and `vm-boot`, which boots through
-  the module
+  kms package's real-card test as root, `vm-boot`, which boots through
+  the module, and `vm-greeter`, which hands the splash's frame to
+  lys-login's greeter on lys-wm and checks every screen dump on the way
 - `nix run` runs it
 - `nix fmt` formats the nix files with alejandra
 

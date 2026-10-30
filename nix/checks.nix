@@ -1,4 +1,8 @@
-{self, ...}: {
+{
+  self,
+  inputs,
+  ...
+}: {
   perSystem = {
     lib,
     pkgs,
@@ -45,6 +49,11 @@
       module = import ./module-check.nix {inherit pkgs module;};
       vm-boot = import ./vm-boot.nix {
         inherit pkgs module;
+        splash = self'.packages.default;
+      };
+      vm-greeter = import ./vm-greeter.nix {
+        inherit pkgs module;
+        inherit (inputs) lys-login lys-wm;
         splash = self'.packages.default;
       };
       # The daemon end to end on a virtio-gpu VM: it lights the output and
