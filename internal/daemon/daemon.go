@@ -222,7 +222,7 @@ func (d *daemon) loadPrevious() {
 	case err != nil:
 		d.cfg.Log.Warn("showing no boot progress", "err", err)
 	default:
-		d.previous = total
+		d.previous, d.state.Booting = total, true
 	}
 }
 

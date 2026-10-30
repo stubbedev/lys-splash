@@ -204,6 +204,8 @@ func TestTextView(t *testing.T) {
 	}{
 		{theme.State{Message: "Starting"}, "Starting\r\n"},
 		{theme.State{Message: "Starting", Phase: 4}, ""},
+		{theme.State{Message: "Starting", Booting: true, Progress: 10}, ""},
+		{theme.State{Message: "Starting", Booting: true, Progress: 11}, ""},
 		{theme.State{Message: "Starting", Prompt: theme.Prompt{Kind: theme.PasswordPrompt, Text: "Disk:", Shown: "••"}}, clearLine + "Disk: "},
 		{theme.State{Message: "Starting", Prompt: theme.Prompt{Kind: theme.PasswordPrompt, Text: "Disk:", Shown: "•••"}}, clearLine + "Disk: "},
 		{theme.State{Message: "Unlocking", Prompt: theme.Prompt{Kind: theme.PasswordPrompt, Text: "Disk:", Shown: "•••"}}, clearLine + "Unlocking\r\n" + clearLine + "Disk: "},

@@ -189,3 +189,20 @@ func TestBootReadsThePreviousDurationAfterTheNewRoot(t *testing.T) {
 		})
 	}
 }
+
+func TestBootShowsProgressOnlyWithAPreviousBoot(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	recorded := filepath.Join(dir, "recorded")
+	if err := SaveBootDuration(recorded, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	quiet := slog.New(slog.DiscardHandler)
+	for path, want := range map[string]bool{recorded: true, filepath.Join(dir, "missing"): false} {
+		d := &daemon{cfg: Config{BootDuration: path, Log: quiet}}
+		d.loadPrevious()
+		if d.state.Booting != want || d.previous > 0 != want {
+			t.Errorf("%s: Booting = %v with previous %v, want %v", path, d.state.Booting, d.previous, want)
+		}
+	}
+}

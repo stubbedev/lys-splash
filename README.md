@@ -49,7 +49,7 @@ still on screen.
 | --- | --- |
 | `internal/protocol` | plymouthd's socket protocol: requests and responses, encoded and decoded |
 | `internal/server` | The daemon side: the abstract socket, peer credentials, requests answered now or later |
-| `internal/theme` | The validated `theme.yaml` (default embedded) and the frame drawn from the splash's state with lys-lib's canvas, damage included: the firmware's BGRT logo or lys's, a throbber or update progress bar, the message line and the prompt |
+| `internal/theme` | The validated `theme.yaml` (default embedded) and the frame drawn from the splash's state with lys-lib's canvas, damage included: the firmware's BGRT logo or lys's, a throbber with the boot's progress under it or the update's progress bar, the message line and the prompt |
 | `internal/kms` | Every card's outputs on two dumb buffers each: mode and scale choice, panel rotation, paced damage-limited flips, cards followed through kernel uevents |
 
 ## Recipes

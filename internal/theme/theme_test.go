@@ -215,6 +215,9 @@ func TestGoldenFrames(t *testing.T) {
 		{"question", Default(), nil, 1, size, State{Prompt: Prompt{Kind: QuestionPrompt, Text: "Continue booting?", Shown: "yes"}}},
 		{"message", Default(), nil, 1, size, State{Message: "Starting Disk Encryption", Phase: 9}},
 		{"update", Default(), nil, 1, size, State{Updating: true, Progress: 42, Message: "Installing updates"}},
+		{"boot-progress-0", Default(), nil, 1, size, State{Booting: true, Progress: 0, Phase: 3}},
+		{"boot-progress-50", Default(), nil, 1, size, State{Booting: true, Progress: 50, Phase: 3}},
+		{"boot-progress-99", Default(), nil, 1, size, State{Booting: true, Progress: 99, Phase: 3}},
 		{"scale2", Default(), nil, 2, image.Pt(1600, 1200), State{Message: "Starting Disk Encryption", Phase: 3}},
 	}
 	for _, tc := range tests {
@@ -314,6 +317,10 @@ func TestEveryPartialRedrawMatchesAFullOne(t *testing.T) {
 		{Updating: true, Progress: 10},
 		{Updating: true, Progress: 90, Phase: 5},
 		{Phase: 6},
+		{Phase: 6, Booting: true},
+		{Phase: 7, Booting: true, Progress: 40},
+		{Phase: 7, Booting: true, Progress: 40, Updating: true},
+		{Phase: 8, Booting: true, Progress: 60},
 	}
 	f := frame(size)
 	var prev *State
@@ -325,6 +332,29 @@ func TestEveryPartialRedrawMatchesAFullOne(t *testing.T) {
 			t.Errorf("step %d: the partial redraw differs from a full one", i)
 		}
 		prev = &steps[i]
+	}
+}
+
+func TestBootProgressDamagesOnlyItsBar(t *testing.T) {
+	t.Parallel()
+	size := image.Pt(640, 400)
+	r := renderer(t, Default(), nil)
+	f := frame(size)
+	prev := State{Booting: true, Progress: 10, Phase: 4}
+	draw(t, r, f, 1, nil, prev)
+	next := prev
+	next.Progress = 11
+	l := r.layout(size, 1)
+	if d := draw(t, r, f, 1, &prev, next); d != l.boot {
+		t.Errorf("a boot progress step damaged %v, want the bar's %v", d, l.boot)
+	}
+	if l.boot.Overlaps(l.busy) || l.boot.Overlaps(l.message) {
+		t.Errorf("the boot progress bar %v overlaps the throbber %v or the message %v", l.boot, l.busy, l.message)
+	}
+	without := frame(size)
+	draw(t, r, without, 1, nil, State{Progress: 10, Phase: 4})
+	if bytes.Equal(without.Pix, f.Pix) {
+		t.Error("the boot progress draws nothing")
 	}
 }
 

@@ -39,12 +39,14 @@ type Prompt struct {
 	Shown string
 }
 
-// State is what the splash shows.
+// State is what the splash shows. Progress is the update's while Updating,
+// and else the boot's while Booting.
 type State struct {
 	Hidden   bool
 	Message  string
 	Prompt   Prompt
 	Updating bool
+	Booting  bool
 	Progress protocol.Percent
 	Phase    int
 }
@@ -75,6 +77,7 @@ type layout struct {
 	scale   int
 	logo    image.Rectangle
 	busy    image.Rectangle
+	boot    image.Rectangle
 	message image.Rectangle
 	prompt  image.Rectangle
 }
@@ -84,6 +87,7 @@ const (
 	throbberSize  = 40
 	barWidth      = 240
 	barHeight     = 8
+	bootBarHeight = 4
 	textSize      = 16
 	bulletSize    = 24
 	lineHeight    = 28
@@ -109,6 +113,7 @@ func (r *Renderer) layout(size image.Point, scale int) layout {
 	busyW := max(s(throbberSize), s(barWidth))
 	y := l.logo.Max.Y + s(gapAfterLogo)
 	l.busy = image.Rect((size.X-busyW)/2, y, (size.X+busyW)/2, y+s(throbberSize))
+	l.boot = image.Rect((size.X-s(barWidth))/2, l.busy.Max.Y+s(gapInForm), (size.X+s(barWidth))/2, l.busy.Max.Y+s(gapInForm+bootBarHeight))
 	y = l.busy.Max.Y + s(gapAfterBusy)
 	l.message = image.Rect(s(margin), y, size.X-s(margin), y+s(lineHeight))
 	y = l.message.Max.Y + s(gapBeforeForm)
@@ -116,7 +121,7 @@ func (r *Renderer) layout(size image.Point, scale int) layout {
 	overflow := l.prompt.Max.Y - (size.Y - s(gapInForm))
 	room := l.busy.Min.Y - (l.logo.Max.Y + s(gapInForm))
 	if up := image.Pt(0, min(overflow, room)); up.Y > 0 {
-		l.busy, l.message, l.prompt = l.busy.Sub(up), l.message.Sub(up), l.prompt.Sub(up)
+		l.busy, l.boot, l.message, l.prompt = l.busy.Sub(up), l.boot.Sub(up), l.message.Sub(up), l.prompt.Sub(up)
 	}
 	return l
 }
@@ -141,6 +146,7 @@ func (r *Renderer) Draw(f kms.Frame, scale int, prev *State, cur State) (image.R
 			return image.Rectangle{}, err
 		}
 		r.busy(cv, l, cur)
+		r.bootProgress(cv, l, cur)
 		r.message(cv, l, cur.Message)
 		r.prompt(cv, l, cur.Prompt)
 		return full, nil
@@ -149,10 +155,15 @@ func (r *Renderer) Draw(f kms.Frame, scale int, prev *State, cur State) (image.R
 		return image.Rectangle{}, nil
 	}
 	var damage image.Rectangle
-	if prev.Updating != cur.Updating || prev.Progress != cur.Progress || !cur.Updating && prev.Phase != cur.Phase {
+	if prev.Updating != cur.Updating || cur.Updating && prev.Progress != cur.Progress || !cur.Updating && prev.Phase != cur.Phase {
 		r.clear(cv, l.busy)
 		r.busy(cv, l, cur)
 		damage = damage.Union(l.busy)
+	}
+	if bootShown(*prev) != bootShown(cur) || bootShown(cur) && prev.Progress != cur.Progress {
+		r.clear(cv, l.boot)
+		r.bootProgress(cv, l, cur)
+		damage = damage.Union(l.boot)
 	}
 	if prev.Message != cur.Message {
 		r.clear(cv, l.message)
@@ -200,18 +211,16 @@ func mix(a, b render.Color, num, denom uint32) render.Color {
 	return render.RGB(ch(a.R(), b.R()), ch(a.G(), b.G()), ch(a.B(), b.B()))
 }
 
+func (r *Renderer) dim() render.Color {
+	return mix(r.theme.Background, r.theme.Accent, 1, 4)
+}
+
 func (r *Renderer) busy(cv *render.Canvas, l layout, s State) {
-	dim := mix(r.theme.Background, r.theme.Accent, 1, 4)
+	dim := r.dim()
 	c := l.busy.Min.Add(l.busy.Max).Div(2)
 	if s.Updating {
 		w, h := barWidth*l.scale, barHeight*l.scale
-		track := image.Rect(c.X-w/2, c.Y-h/2, c.X+w/2, c.Y+h/2)
-		cv.RoundedRect(rect(track), h/2, dim)
-		fill := track
-		fill.Max.X = track.Min.X + w*int(s.Progress)/int(protocol.MaxPercent)
-		if fill.Dx() > 0 {
-			cv.RoundedRect(rect(fill), h/2, r.theme.Accent)
-		}
+		r.bar(cv, image.Rect(c.X-w/2, c.Y-h/2, c.X+w/2, c.Y+h/2), s.Progress)
 		return
 	}
 	size := float64(throbberSize * l.scale)
@@ -233,6 +242,26 @@ func (r *Renderer) busy(cv *render.Canvas, l layout, s State) {
 			x := c.X + (i-1)*d*3/2
 			cv.RoundedRect(render.Rect{X: x - d/2, Y: c.Y - d/2, W: d, H: d}, d/2, col)
 		}
+	}
+}
+
+func bootShown(s State) bool {
+	return s.Booting && !s.Updating
+}
+
+func (r *Renderer) bootProgress(cv *render.Canvas, l layout, s State) {
+	if bootShown(s) {
+		r.bar(cv, l.boot, s.Progress)
+	}
+}
+
+func (r *Renderer) bar(cv *render.Canvas, track image.Rectangle, p protocol.Percent) {
+	radius := track.Dy() / 2
+	cv.RoundedRect(rect(track), radius, r.dim())
+	fill := track
+	fill.Max.X = track.Min.X + track.Dx()*int(p)/int(protocol.MaxPercent)
+	if fill.Dx() > 0 {
+		cv.RoundedRect(rect(fill), radius, r.theme.Accent)
 	}
 }
 
