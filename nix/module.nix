@@ -11,6 +11,10 @@
       lib.listToAttrs (map (name: lib.nameValuePair (lib.removeSuffix ".${kind}" name) {wantedBy = units.wantedBy name;})
         (builtins.filter (name: lib.hasSuffix ".${kind}" name && (only == null || builtins.elem name only)) units.names));
     themeFile = (pkgs.formats.yaml {}).generate "lys-splash-theme.yaml" cfg.theme;
+    agent = systemd: lib.getExe' systemd "systemd-tty-ask-password-agent";
+    askPassword = systemd: {
+      lys-splash-ask-password.serviceConfig.ExecStart = ["" "${agent systemd} --watch --plymouth"];
+    };
   in {
     options.boot.lys-splash = {
       enable = lib.mkEnableOption "lys-splash, the lys desktop's boot splash, in place of plymouth";
@@ -45,15 +49,15 @@
         packages = [cfg.package];
         storePaths = [
           (lib.getExe cfg.package)
-          (lib.getExe' config.systemd.package "systemd-tty-ask-password-agent")
+          (agent config.boot.initrd.systemd.package)
         ];
-        services = enable "service" ["lys-splash-start.service" "lys-splash-switch-root.service"];
+        services = enable "service" ["lys-splash-start.service" "lys-splash-switch-root.service"] // askPassword config.boot.initrd.systemd.package;
         paths = enable "path" null;
         contents = lib.mkIf (cfg.theme != {}) {"/etc/lys-splash/theme.yaml".source = themeFile;};
       };
 
       systemd.packages = [cfg.package];
-      systemd.services = enable "service" null;
+      systemd.services = lib.recursiveUpdate (enable "service" null) (askPassword config.systemd.package);
       systemd.paths = enable "path" null;
       environment.systemPackages = [cfg.package];
       environment.etc."lys-splash/theme.yaml" = lib.mkIf (cfg.theme != {}) {source = themeFile;};

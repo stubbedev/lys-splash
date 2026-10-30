@@ -40,10 +40,32 @@ in
     + expect "splash is not on the kernel command line" (builtins.elem "splash" enabled.boot.kernelParams)
     + expect "the system does not start lys-splash-quit" (builtins.elem "multi-user.target" enabled.systemd.services.lys-splash-quit.wantedBy)
     + ''
-      zstd -dc ${enabled.system.build.initialRamdisk}/${enabled.system.boot.loader.initrdFile} | cpio -it --quiet > files
+      mkdir root
+      zstd -dc ${enabled.system.build.initialRamdisk}/${enabled.system.boot.loader.initrdFile} | (cd root && cpio -idm --quiet)
+      (cd root && find . -mindepth 1 | sed 's|^\./||') > files
+      inroot() {
+        for f in "$@"; do
+          while [ -L "$f" ]; do
+            t=$(readlink "$f")
+            case $t in
+              /*) f=root$t ;;
+              *) f=$(dirname "$f")/$t ;;
+            esac
+          done
+          cat "$f"
+        done
+      }
+      for unit in root/nix/store/*-initrd-units/lys-splash-*.service; do
+        for exe in $(inroot "$unit" "$unit".d/*.conf 2>/dev/null | awk '
+          /^Exec[A-Za-z]*=$/ { key = substr($0, 1, length($0) - 1); delete runs[key]; next }
+          /^Exec[A-Za-z]*=/ { key = substr($0, 1, index($0, "=") - 1); runs[key] = runs[key] " " substr($0, index($0, "=") + 1) }
+          END { for (k in runs) print runs[k] }' | tr ' ' '\n' | sed -n 's|^-\{0,1\}\(/nix/store/.*\)|\1|p'); do
+          test -e "root$exe" || { echo "$(basename "$unit") runs $exe, which the initrd lacks" >&2; exit 1; }
+        done
+      done
       for want in \
         ${lib.removePrefix "/" (lib.getExe splash)} \
-        ${lib.removePrefix "/" (lib.getExe' enabled.systemd.package "systemd-tty-ask-password-agent")} \
+        ${lib.removePrefix "/" (lib.getExe' enabled.boot.initrd.systemd.package "systemd-tty-ask-password-agent")} \
         'nix/store/[^/]*-initrd-units/lys-splash-start.service' \
         'nix/store/[^/]*-initrd-units/lys-splash-switch-root.service' \
         'nix/store/[^/]*-initrd-units/lys-splash-ask-password.path' \
