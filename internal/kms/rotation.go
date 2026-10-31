@@ -1,6 +1,7 @@
 package kms
 
 import (
+	"encoding/binary"
 	"fmt"
 	"image"
 )
@@ -101,25 +102,42 @@ func Blit(dst, src Frame, r image.Rectangle, rot Rotation) {
 		}
 		return
 	}
-	for y := r.Min.Y; y < r.Max.Y; y++ {
-		row := src.Pix[y*src.Stride:]
-		for x := r.Min.X; x < r.Max.X; x++ {
-			dx, dy := rot.pixel(src.Size, x, y)
-			d := dy*dst.Stride + dx*bytesPerPixel
-			s := x * bytesPerPixel
-			copy(dst.Pix[d:d+bytesPerPixel], row[s:s+bytesPerPixel])
+	d := rot.Device(src.Size, r)
+	if !rot.sideways() {
+		blitTurned(dst, src, d, rot)
+		return
+	}
+	for ty := d.Min.Y; ty < d.Max.Y; ty += blitTile {
+		for tx := d.Min.X; tx < d.Max.X; tx += blitTile {
+			tile := image.Rect(tx, ty, tx+blitTile, ty+blitTile).Intersect(d)
+			blitTurned(dst, src, tile, rot)
 		}
 	}
 }
 
-func (r Rotation) pixel(view image.Point, x, y int) (int, int) {
+const blitTile = 32
+
+func blitTurned(dst, src Frame, d image.Rectangle, rot Rotation) {
+	for dy := d.Min.Y; dy < d.Max.Y; dy++ {
+		x, y, stepX, stepY := rot.source(src.Size, d.Min.X, dy)
+		at, step := y*src.Stride+x*bytesPerPixel, stepY*src.Stride+stepX*bytesPerPixel
+		row := dst.Pix[dy*dst.Stride+d.Min.X*bytesPerPixel : dy*dst.Stride+d.Max.X*bytesPerPixel]
+		for len(row) >= bytesPerPixel {
+			binary.LittleEndian.PutUint32(row, binary.LittleEndian.Uint32(src.Pix[at:]))
+			row = row[bytesPerPixel:]
+			at += step
+		}
+	}
+}
+
+func (r Rotation) source(view image.Point, dx, dy int) (x, y, stepX, stepY int) {
 	switch r {
 	case UpsideDown:
-		return view.X - 1 - x, view.Y - 1 - y
+		return view.X - 1 - dx, view.Y - 1 - dy, -1, 0
 	case Clockwise:
-		return view.Y - 1 - y, x
+		return dy, view.Y - 1 - dx, 0, -1
 	case CounterClockwise:
-		return y, view.X - 1 - x
+		return view.X - 1 - dy, dx, 0, 1
 	}
-	return x, y
+	return dx, dy, 1, 0
 }

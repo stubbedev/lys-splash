@@ -721,3 +721,43 @@ func TestDisplayDeactivatesNewCards(t *testing.T) {
 		t.Errorf("after Reactivate: master %v %v, %d outputs", a.master, b.master, len(disp.Outputs()))
 	}
 }
+
+func (r Rotation) pixel(view image.Point, x, y int) (int, int) {
+	switch r {
+	case UpsideDown:
+		return view.X - 1 - x, view.Y - 1 - y
+	case Clockwise:
+		return view.Y - 1 - y, x
+	case CounterClockwise:
+		return y, view.X - 1 - x
+	}
+	return x, y
+}
+
+func TestBlitTurnsARectangleSpanningTiles(t *testing.T) {
+	t.Parallel()
+	view := image.Pt(2*blitTile+7, blitTile+13)
+	r := image.Rect(3, 5, 2*blitTile+4, blitTile+11)
+	for _, rot := range []Rotation{UpsideDown, Clockwise, CounterClockwise} {
+		src := frameOf(view)
+		for y := range view.Y {
+			for x := range view.X {
+				setPixel(src, x, y, uint32(1+y*view.X+x))
+			}
+		}
+		dst := frameOf(rot.View(view))
+		Blit(dst, src, r, rot)
+		for y := range view.Y {
+			for x := range view.X {
+				dx, dy := rot.pixel(view, x, y)
+				want := uint32(0)
+				if image.Pt(x, y).In(r) {
+					want = pixelAt(src, x, y)
+				}
+				if got := pixelAt(dst, dx, dy); got != want {
+					t.Fatalf("%v: device (%d,%d) = %d, want %d", rot, dx, dy, got, want)
+				}
+			}
+		}
+	}
+}
