@@ -4,7 +4,7 @@ Wants=getty-pre.target
 After=rc-local.service lys-splash-start.service systemd-user-sessions.service
 Before=getty-pre.target
 Conflicts=plymouth-quit-wait.service
-ConditionKernelCommandLine=!plymouth.enable=0
+@kernel_command_line_conditions@
 
 [Service]
 Type=oneshot

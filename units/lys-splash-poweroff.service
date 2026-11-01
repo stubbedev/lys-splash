@@ -4,7 +4,7 @@ DefaultDependencies=no
 After=getty@tty1.service display-manager.service lys-splash-start.service
 Before=systemd-poweroff.service
 Conflicts=plymouth-poweroff.service
-ConditionKernelCommandLine=!plymouth.enable=0
+@kernel_command_line_conditions@
 ConditionVirtualization=!container
 
 [Service]

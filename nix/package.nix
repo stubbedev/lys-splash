@@ -3,7 +3,15 @@
     lib,
     pkgs,
     ...
-  }: {
+  }: let
+    kernelCommandLineConditions = lib.concatMapStringsSep "\n" (c: "ConditionKernelCommandLine=${c}") [
+      "!plymouth.enable=0"
+      "!nosplash"
+      "!splash=verbose"
+      "|splash"
+      "|rhgb"
+    ];
+  in {
     packages.default = pkgs.buildGo127Module {
       pname = "lys-splash";
       version = "0-unstable-${self.lastModifiedDate or "0"}";
@@ -36,6 +44,7 @@
           for unit in units/*; do
             substitute "$unit" "$1/$(basename "$unit")" \
               --subst-var-by lys_splash "$2" \
+              --subst-var-by kernel_command_line_conditions ${lib.escapeShellArg kernelCommandLineConditions} \
               --subst-var-by systemd_tty_ask_password_agent "$3"
           done
         }

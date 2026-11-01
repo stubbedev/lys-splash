@@ -46,7 +46,7 @@ explicitly. `GOTOOLCHAIN=local` keeps the compiler from downloading itself.
 | --- | --- |
 | `package` | Builds the package and runs its unit tests |
 | `plymouth-client` | nixpkgs' `plymouth` client against the server |
-| `units` | Every unit conflicts with its Plymouth unit and stays off under `plymouth.enable=0` |
+| `units` | Every unit conflicts with its Plymouth unit, and the units and initramfs-tools' script agree on a table of kernel command lines |
 | `module` | Evaluates the NixOS module and looks for the splash in its initrd |
 | `vm-kms` | A VM whose only card is vkms runs the kms package's real-card test as root |
 | `vm-kms-switch` | The splash on simpledrm and then on the native driver as it takes over, in a VM |

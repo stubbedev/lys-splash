@@ -2,7 +2,7 @@
 Description=Quit the lys-splash boot splash
 After=rc-local.service lys-splash-start.service systemd-user-sessions.service
 Conflicts=plymouth-quit.service
-ConditionKernelCommandLine=!plymouth.enable=0
+@kernel_command_line_conditions@
 
 [Service]
 Type=oneshot

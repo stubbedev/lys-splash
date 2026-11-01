@@ -31,8 +31,8 @@ replaced whole.
 
 ## The units
 
-Each unit conflicts with the Plymouth unit it stands in for and stays off under
-`plymouth.enable=0`.
+Each unit conflicts with the Plymouth unit it stands in for and follows [the
+kernel command line](/guide/install#the-kernel-command-line).
 
 | Unit | Wanted by | What it does |
 | --- | --- | --- |

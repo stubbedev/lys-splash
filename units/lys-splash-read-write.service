@@ -4,7 +4,7 @@ DefaultDependencies=no
 After=local-fs.target lys-splash-start.service
 Before=sysinit.target
 Conflicts=plymouth-read-write.service
-ConditionKernelCommandLine=!plymouth.enable=0
+@kernel_command_line_conditions@
 ConditionPathExists=!/etc/initrd-release
 
 [Service]

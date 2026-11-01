@@ -72,21 +72,27 @@ boots are tested on NixOS.
 
 ## The kernel command line
 
-| Parameter | initramfs-tools' script | systemd units |
-| --- | --- | --- |
-| `splash` | Needed: starts the splash in the initrd | Ignored |
-| `nosplash` | Does not start it, unless a `splash` follows | Ignored |
-| `plymouth.enable=0` | Does not start it, unless a `splash` follows | Do not run |
+The systemd units and initramfs-tools' script read it the same way, as one rule.
+The splash runs when the command line asks for it and nothing turns it off:
 
-So `plymouth.enable=0` at the end of the command line turns the splash off
-everywhere, and it is the only one of the three that does. `nosplash` alone only
-keeps it out of the initramfs: `lys-splash-start.service` still starts it in the
-real root. The units that show a splash do not run in a
-container either.
+| Parameter | What it does |
+| --- | --- |
+| `splash`, `splash=silent`, `rhgb` | Asks for the splash; one of them is needed |
+| `nosplash` | Turns it off, wherever it stands on the command line |
+| `splash=verbose` | Turns it off |
+| `plymouth.enable=0` | Turns it off |
 
-If your bootloader's command line has no `splash`, add it, or the splash on
-Ubuntu and Debian only starts once systemd runs in the real root, too late for
-disk passwords in the initramfs.
+Turned off, no unit runs at any stage of the boot or the shutdown, and the kernel
+and systemd keep the console, where systemd's console agent asks for passwords.
+The order of the parameters does not matter, so a splash started in the initramfs
+always has `lys-splash-quit.service` to end it. The units that show a splash do
+not run in a container either.
+
+Debian's Plymouth stops on `nosplash` in its units too. Where Plymouth falls back
+to scrolling text without `splash`, lys-splash leaves the console to the kernel.
+
+Without `splash` or `rhgb` on your bootloader's command line there is no splash, so
+add one. The NixOS module adds `splash`.
 
 ## Check that it works
 
