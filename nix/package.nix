@@ -19,7 +19,7 @@
         );
       };
 
-      vendorHash = "sha256-vzp3VNvPjUowjAdilGXO6XQcsC4GFT5ns5ev09EIgI8=";
+      vendorHash = "sha256-iYd70zZRx6Q9XoL54+h1Wo5XUoQdR2UmS09KDKHWaqE=";
 
       env.CGO_ENABLED = 0;
 
