@@ -88,7 +88,7 @@ def hand_over(m):
 
 
 def reboot_shows_splash(m, splash):
-    m.execute("systemctl --no-block reboot")
+    m.execute("systemctl --no-block reboot", check_return=False, check_output=False)
     m.wait_for_console_text(r'msg="showing the splash" mode=reboot', timeout=seconds(30))
     m.wait_for_console_text(r"reboot: Restarting system", timeout=seconds(60))
     await_until(10, lambda: (None, None if "paused" in m.send_monitor_command("info status") else "the VM has not paused at the reset"))
