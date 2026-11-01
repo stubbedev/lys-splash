@@ -12,6 +12,8 @@
     testBinary = name: pkg:
       self'.packages.default.overrideAttrs {
         pname = "lys-splash-${name}-test";
+        outputs = ["out"];
+        postInstall = "";
         buildPhase = ''
           runHook preBuild
           go test -c -o ${name}.test ./${pkg}
