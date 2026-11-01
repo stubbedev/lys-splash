@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +55,37 @@ func TestParseOptions(t *testing.T) {
 		if _, err := parseOptions("lys-splash", args, io.Discard); err == nil {
 			t.Errorf("parseOptions(%q) succeeded", args)
 		}
+	}
+}
+
+func TestDetachedStderrPrefersTheKernelsLog(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, nil))
+	device := filepath.Join(t.TempDir(), "kmsg")
+	if err := os.WriteFile(device, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, target, closeFile := detachedStderr(device, log)
+	if target != logsToKmsg || f.Name() != device {
+		t.Errorf("with the device present, stderr = %s and target = %s", f.Name(), target)
+	}
+	if err := closeFile(); err != nil {
+		t.Error(err)
+	}
+	if logged.Len() != 0 {
+		t.Errorf("logged with the device present: %s", logged.String())
+	}
+
+	f, target, closeFile = detachedStderr(device+"-missing", log)
+	if target != logsToStderr || f != os.Stderr {
+		t.Errorf("with no device, stderr = %s and target = %s", f.Name(), target)
+	}
+	if err := closeFile(); err != nil {
+		t.Error(err)
+	}
+	if !strings.Contains(logged.String(), "kmsg-missing") {
+		t.Errorf("the missing device was not reported: %q", logged.String())
 	}
 }
 

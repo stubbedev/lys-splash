@@ -60,8 +60,11 @@ its colours. On a systemd initrd, look for it in the journal:
 journalctl -b -u lys-splash-start.service
 ```
 
-A splash that initramfs-tools' script starts leaves no log, so there the embedded
-theme's colours are the only sign.
+A splash that initramfs-tools' script starts logs to the kernel's buffer instead:
+
+```sh
+journalctl -b -t lys-splash
+```
 
 ## Trying a change
 

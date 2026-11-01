@@ -28,6 +28,7 @@ import (
 	"github.com/stubbedev/lys-splash/internal/console"
 	"github.com/stubbedev/lys-splash/internal/daemon"
 	"github.com/stubbedev/lys-splash/internal/kms"
+	"github.com/stubbedev/lys-splash/internal/kmsg"
 	"github.com/stubbedev/lys-splash/internal/protocol"
 	"github.com/stubbedev/lys-splash/internal/server"
 	"github.com/stubbedev/lys-splash/internal/theme"
@@ -36,6 +37,8 @@ import (
 const (
 	defaultTheme  = "/etc/lys-splash/theme.yaml"
 	daemonizedEnv = "LYS_SPLASH_DAEMONIZED"
+	logsToKmsg    = "kmsg"
+	logsToStderr  = "stderr"
 	readyTimeout  = 30 * time.Second
 	selfExe       = "/proc/self/exe"
 )
@@ -114,7 +117,7 @@ func runDaemon(argv []string, plymouthd bool) int {
 	if o.debug {
 		level = slog.LevelDebug
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	log := slog.New(logHandler(os.Getenv(daemonizedEnv), level))
 	initrd, err := daemon.InInitrd()
 	if err != nil {
 		log.Error("starting", "err", err)
@@ -127,7 +130,7 @@ func runDaemon(argv []string, plymouthd bool) int {
 		return 1
 	}
 	if plymouthd && !o.noDaemon && os.Getenv(daemonizedEnv) == "" {
-		if err := daemonize(argv); err != nil {
+		if err := daemonize(argv, log); err != nil {
 			log.Error("daemonizing", "err", err)
 			return 1
 		}
@@ -140,23 +143,46 @@ func runDaemon(argv []string, plymouthd bool) int {
 	return 0
 }
 
-func daemonize(argv []string) error {
+// logHandler logs as the parent's daemonize set the daemon's standard error up.
+func logHandler(daemonized string, level slog.Level) slog.Handler {
+	if daemonized == logsToKmsg {
+		return kmsg.NewHandler(os.Stderr, os.Getpid(), level)
+	}
+	return slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+}
+
+func daemonize(argv []string, log *slog.Logger) error {
 	addr := "@lys-splash-ready-" + rand.Text()
 	ready, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: addr, Net: "unixgram"})
 	if err != nil {
 		return fmt.Errorf("listen for the daemon's readiness: %w", err)
 	}
-	err = startDetached(argv, addr, ready)
+	err = startDetached(argv, addr, ready, log)
 	if cerr := ready.Close(); cerr != nil {
 		err = errors.Join(err, fmt.Errorf("close the readiness socket: %w", cerr))
 	}
 	return err
 }
 
-func startDetached(argv []string, addr string, ready *net.UnixConn) error {
+// detachedStderr opens where a detached daemon's standard error goes: the
+// kernel's log buffer, with this process's own standard error for a kernel
+// without one. It names the log target for the daemon's handler.
+func detachedStderr(path string, log *slog.Logger) (stderr *os.File, target string, closeFile func() error) {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0) //nolint:gosec // the path is the kernel's device
+	if err != nil {
+		log.Warn("the detached daemon logs to this standard error", "err", err)
+		return os.Stderr, logsToStderr, func() error { return nil }
+	}
+	return f, logsToKmsg, f.Close
+}
+
+func startDetached(argv []string, addr string, ready *net.UnixConn, log *slog.Logger) (err error) {
+	stderr, target, closeStderr := detachedStderr(kmsg.Path, log)
+	defer func() { err = errors.Join(err, closeStderr()) }()
 	cmd := exec.Command(selfExe, argv[1:]...) //nolint:gosec // the daemon re-runs itself with its own arguments
 	cmd.Args[0] = argv[0]
-	cmd.Env = append(os.Environ(), daemonizedEnv+"=1", daemon.NotifyEnv+"="+addr)
+	cmd.Stderr = stderr
+	cmd.Env = append(os.Environ(), daemonizedEnv+"="+target, daemon.NotifyEnv+"="+addr)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start the daemon: %w", err)

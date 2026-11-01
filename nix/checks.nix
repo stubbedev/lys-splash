@@ -69,7 +69,9 @@
       # The daemon end to end on a virtio-gpu VM: it lights the output and
       # takes tty1, the plymouth client and systemd's password agent talk
       # to it, a password typed on the VM's keyboard comes back, and quit
-      # with --retain-splash leaves the frame for a screenshot.
+      # with --retain-splash leaves the frame for a screenshot. Started as
+      # plymouthd it detaches, and its warning about a bad theme reaches dmesg
+      # and the journal.
       vm-splash = let
         splash = vmSplash;
       in
@@ -86,7 +88,10 @@
               "systemd-ask-password-wall.service"
             ];
             environment.systemPackages = [splash];
-            systemd.tmpfiles.rules = ["L+ /run/plymouth-link/plymouth - - - - ${splash}/bin/lys-splash"];
+            systemd.tmpfiles.rules = [
+              "L+ /run/plymouth-link/plymouth - - - - ${splash}/bin/lys-splash"
+              "L+ /run/plymouth-link/plymouthd - - - - ${splash}/bin/lys-splash"
+            ];
           };
           testScript = ''
             machine.wait_for_unit("multi-user.target")
@@ -114,6 +119,13 @@
             machine.screenshot("retained")
             rc, _ = machine.execute("lys-splash --ping")
             assert rc == 3, f"--ping with no daemon exited {rc}, want 3"
+            machine.succeed("echo 'colour: not-a-field' > /tmp/bad-theme.yaml")
+            machine.succeed("/run/plymouth-link/plymouthd --mode=boot --theme=/tmp/bad-theme.yaml")
+            machine.succeed("lys-splash --ping")
+            machine.succeed("dmesg | grep 'lys-splash.*falling back to the default theme'")
+            machine.wait_until_succeeds("journalctl -b -t lys-splash -p warning -g 'falling back to the default theme'", timeout=10)
+            machine.succeed("lys-splash quit")
+            machine.wait_until_fails("lys-splash --ping", timeout=10)
           '';
         };
     };

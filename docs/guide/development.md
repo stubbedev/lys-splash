@@ -15,6 +15,7 @@ explicitly. `GOTOOLCHAIN=local` keeps the compiler from downloading itself.
 | `internal/daemon` | The splash process: the protocol's lifecycle from boot to quit, the modes and the boot duration |
 | `internal/theme` | The validated `theme.yaml` (default embedded) and the frame drawn from the splash's state with lys-lib's canvas, damage included |
 | `internal/kms` | Every card's outputs on two dumb buffers each: mode and scale choice, panel rotation, paced damage-limited flips, cards followed through kernel uevents |
+| `internal/kmsg` | The log handler for a detached daemon, whose log goes to the kernel's buffer |
 | `internal/console` | The virtual terminal, the console's captured output and the text fallback |
 | `internal/key` | The bytes the terminal sends, decoded into keys |
 | `internal/ask` | The queue of prompts, the text typed, the cached passwords and the keystroke watches |
@@ -50,7 +51,7 @@ explicitly. `GOTOOLCHAIN=local` keeps the compiler from downloading itself.
 | `module` | Evaluates the NixOS module and looks for the splash in its initrd |
 | `vm-kms` | A VM whose only card is vkms runs the kms package's real-card test as root |
 | `vm-kms-switch` | The splash on simpledrm and then on the native driver as it takes over, in a VM |
-| `vm-splash` | The daemon on virtio-gpu, with the plymouth client and systemd's password agent |
+| `vm-splash` | The daemon on virtio-gpu, with the plymouth client and systemd's password agent, then detached as `plymouthd` with its log reaching the journal |
 | `vm-boot` | A boot through the module, on virtio-gpu and without any display |
 | `vm-greeter` | Hands the splash's frame to lys-login's greeter on lys-wm and checks every screen dump on the way |
 | `vm-e2e` | The whole path in one test, each stage failing with its name: OVMF and simpledrm, then virtio-gpu, a LUKS root and a second LUKS disk unlocked by one passphrase typed at the splash, the splash surviving the switch to the real root, nixpkgs' plymouth client, the hand-over to the greeter, the reboot splash, and a machine without a display typing its passphrase at the text fallback |

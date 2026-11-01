@@ -103,5 +103,8 @@ journalctl -b -u 'lys-splash*'
 
 After the boot has finished `--ping` exits 3, because no splash is running any
 more. The journal holds what a splash started by a unit said about its outputs,
-its theme and its quit. A splash that initramfs-tools' script starts detaches
-from its standard error, so its log goes nowhere.
+its theme and its quit. A splash that initramfs-tools' script starts has no
+standard error to keep, so it logs to `/dev/kmsg`: `dmesg` shows it, and so does
+`journalctl -b -t lys-splash` once journald runs. The kernel rate-limits what is
+written there, which `--debug` can reach; boot with `printk.devkmsg=on` to lift
+the limit.
