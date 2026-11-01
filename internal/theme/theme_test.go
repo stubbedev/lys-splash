@@ -6,7 +6,6 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -181,16 +180,9 @@ func draw(t *testing.T, r *Renderer, f kms.Frame, scale int, prev *State, cur St
 	return d
 }
 
-func goldenTolerance() golden.Tolerance {
-	if runtime.GOARCH == "amd64" {
-		return golden.Tolerance{}
-	}
-	return golden.Tolerance{ChannelDiff: 2}
-}
-
 func check(t *testing.T, name string, f kms.Frame) {
 	t.Helper()
-	golden.Check(t, goldenDir, name, render.NRGBA(f.Pix, f.Stride, f.Size.X, f.Size.Y), goldenTolerance())
+	golden.Check(t, goldenDir, name, render.NRGBA(f.Pix, f.Stride, f.Size.X, f.Size.Y), golden.Tolerance{})
 }
 
 func renderer(t *testing.T, th Theme, bgrt *BGRT) *Renderer {
