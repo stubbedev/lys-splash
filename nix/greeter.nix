@@ -7,10 +7,14 @@
   splash,
   lys-login,
   lys-wm,
+  wmPackage,
 }: {config, ...}: {
   imports = [lys-login.nixosModules.default lys-wm.nixosModules.default];
   boot.kernelParams = ["drm.debug=0x10" "log_buf_len=64M"];
-  programs.lys-wm.enable = true;
+  programs.lys-wm = {
+    enable = true;
+    package = wmPackage;
+  };
   programs.lys-login.greeter = {
     enable = true;
     displayManager = "lys-login";
