@@ -1,16 +1,23 @@
 import contextlib
 
 
+def failure_logs(m, logs):
+    console = f"--- {m.name}'s console\n" + m.get_console_log()[-20000:]
+    if not m.is_up():
+        return console
+    try:
+        _, out = m.execute(f"{{ {logs}; }} 2>&1", timeout=seconds(30))
+    except BaseException:
+        return console
+    return f"--- {m.name}: {logs}\n{out}"
+
+
 @contextlib.contextmanager
 def stage(m, name, logs="journalctl -b --no-pager -o short-monotonic -u 'lys-splash*' -u 'systemd-cryptsetup@*'"):
     try:
         yield
     except BaseException as e:
-        try:
-            _, out = m.execute(f"{{ {logs}; }} 2>&1", timeout=30)
-            print(f"--- {m.name}: {logs}\n{out}")
-        except BaseException:
-            print(f"--- {m.name}'s console\n" + m.get_console_log()[-20000:])
+        print(failure_logs(m, logs))
         raise AssertionError(f"{m.name}: the {name} stage failed: {e}") from e
 
 
@@ -28,7 +35,7 @@ def encrypt(m, disks):
 
 
 def type_passphrase(m):
-    m.wait_for_console_text(r"Starting .*Cryptography Setup for .*crypt0", timeout=seconds(120))
+    m.wait_for_console_text(r"Cryptography Setup for ", timeout=seconds(120))
     time.sleep(3)
     m.send_chars(passphrase + "\n")
 

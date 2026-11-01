@@ -102,6 +102,8 @@ def journal(m):
     entries = []
     for line in filter(None, out.split("\n")):
         e = json.loads(line)
+        if "__MONOTONIC_TIMESTAMP" not in e:
+            continue
         msg = e.get("MESSAGE") or ""
         if isinstance(msg, list):
             msg = bytes(msg).decode(errors="replace")
