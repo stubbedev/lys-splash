@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/stubbedev/lys-lib/drm"
 	"golang.org/x/sys/unix"
@@ -19,6 +20,14 @@ import (
 // firmware's framebuffer until the native driver takes the GPU over:
 // simpledrm, efidrm, vesadrm and ofdrm.
 var firmwareDrivers = []string{"simple-framebuffer", "efi-framebuffer", "vesa-framebuffer", "of-display"}
+
+// A card another process is master of is tried again this often for this
+// long: a display manager's service can stop before the compositor in its
+// session lets the card go.
+const (
+	busyRetryEvery = 20 * time.Millisecond
+	busyRetryFor   = 10 * time.Second
+)
 
 // Paths are where the display finds card nodes and their sysfs entries.
 type Paths struct {
@@ -30,12 +39,15 @@ type Paths struct {
 var SystemPaths = Paths{Dev: "/dev/dri", Sysfs: "/sys/class/drm"}
 
 // Event is something that happened to the display: a card's page flip, a
-// uevent, or a reader failing. Display.Handle applies it.
+// uevent, a reader failing, or the time to try a busy card again.
+// Display.Handle applies it.
 type Event struct {
 	card   *Card
 	flip   drm.FlipEvent
 	uevent []byte
 	err    error
+	busy   string
+	until  time.Time
 }
 
 // Display is every DRM card's outputs. It is not safe for concurrent use:
@@ -56,7 +68,8 @@ type Display struct {
 
 // Open opens every card under paths and lights its outputs, then follows
 // cards appearing and disappearing. A card that fails to open is logged and
-// left out; with none at all, Outputs is empty and the splash has no
+// left out, unless another process is master of it, when it is tried again
+// for a while; with none at all, Outputs is empty and the splash has no
 // graphical output.
 func Open(paths Paths, log *slog.Logger) (*Display, error) {
 	return open(paths, func(path string) (device, error) { return drm.Open(path) }, true, log)
@@ -104,11 +117,29 @@ func (d *Display) firmware(name string) (bool, error) {
 }
 
 func (d *Display) add(name string) {
+	d.light(name, time.Now().Add(busyRetryFor))
+}
+
+func (d *Display) light(name string, until time.Time) {
 	if _, ok := d.cards[name]; ok {
 		return
 	}
-	if err := d.tryAdd(name); err != nil {
-		d.log.Warn("lighting a card", "card", name, "err", err)
+	err := d.tryAdd(name)
+	if err == nil {
+		return
+	}
+	if errors.Is(err, unix.EBUSY) && !d.paused && time.Now().Before(until) {
+		d.wg.Go(func() { d.retryBusy(name, until) })
+		return
+	}
+	d.log.Warn("lighting a card", "card", name, "err", err)
+}
+
+func (d *Display) retryBusy(name string, until time.Time) {
+	select {
+	case <-time.After(busyRetryEvery):
+		d.send(Event{busy: name, until: until})
+	case <-d.done:
 	}
 }
 
@@ -203,14 +234,17 @@ func (d *Display) Events() <-chan Event {
 }
 
 // Handle applies e: a flip lets its output show the next frame, a card that
-// appears is opened and lit, one that disappears is dropped and a hotplug
-// rescans its card's connectors.
+// appears is opened and lit, one that disappears is dropped, a hotplug
+// rescans its card's connectors and a busy card is tried again.
 func (d *Display) Handle(e Event) error {
 	switch {
 	case e.err != nil:
 		return e.err
 	case e.uevent != nil:
 		return d.uevent(e.uevent)
+	case e.busy != "":
+		d.light(e.busy, e.until)
+		return nil
 	case e.card != nil:
 		if d.cards[e.card.name] != e.card {
 			return nil

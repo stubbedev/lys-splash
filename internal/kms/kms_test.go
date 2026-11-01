@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/stubbedev/lys-lib/drm"
+	"golang.org/x/sys/unix"
 )
 
 var quiet = slog.New(slog.DiscardHandler)
@@ -760,4 +762,94 @@ func TestBlitTurnsARectangleSpanningTiles(t *testing.T) {
 			}
 		}
 	}
+}
+
+func busyFake() (*fakeDevice, map[string]*fakeDevice) {
+	d := newFakeDevice("/dev/dri/card0", 1)
+	d.connect(40, [2]uint32{531, 299}, mode(64, 32, true))
+	d.masterErr = unix.EBUSY
+	return d, map[string]*fakeDevice{"card0": d}
+}
+
+func nextEvent(t *testing.T, disp *Display) Event {
+	t.Helper()
+	select {
+	case e := <-disp.Events():
+		return e
+	case <-time.After(5 * time.Second):
+		t.Fatal("no event to try the busy card again")
+		return Event{}
+	}
+}
+
+func assertNoEvent(t *testing.T, disp *Display) {
+	t.Helper()
+	select {
+	case e := <-disp.Events():
+		t.Fatalf("an event after the display stopped trying: %+v", e)
+	case <-time.After(5 * busyRetryEvery):
+	}
+}
+
+func TestDisplayLightsACardOnceItsMasterLetsGo(t *testing.T) {
+	t.Parallel()
+	d, devs := busyFake()
+	disp, _ := fakeDisplay(t, devs, nil)
+	if len(disp.Outputs()) != 0 {
+		t.Fatal("a busy card has outputs")
+	}
+	if err := disp.Handle(nextEvent(t, disp)); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.Outputs()) != 0 {
+		t.Fatal("a card still busy has outputs")
+	}
+	e := nextEvent(t, disp)
+	d.masterErr = nil
+	if err := disp.Handle(e); err != nil {
+		t.Fatal(err)
+	}
+	if !d.master || len(disp.Outputs()) != 1 {
+		t.Errorf("after the master let go: master %v, %d outputs", d.master, len(disp.Outputs()))
+	}
+	assertNoEvent(t, disp)
+}
+
+func TestDisplayGivesUpOnACardThatStaysBusy(t *testing.T) {
+	t.Parallel()
+	_, devs := busyFake()
+	disp, _ := fakeDisplay(t, devs, nil)
+	e := nextEvent(t, disp)
+	e.until = time.Now().Add(-time.Second)
+	if err := disp.Handle(e); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.Outputs()) != 0 {
+		t.Errorf("after giving up: %d outputs", len(disp.Outputs()))
+	}
+	assertNoEvent(t, disp)
+}
+
+func TestDisplayStopsTryingABusyCardWhileDeactivated(t *testing.T) {
+	t.Parallel()
+	_, devs := busyFake()
+	disp, _ := fakeDisplay(t, devs, nil)
+	if err := disp.Deactivate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := disp.Handle(nextEvent(t, disp)); err != nil {
+		t.Fatal(err)
+	}
+	assertNoEvent(t, disp)
+}
+
+func TestDisplayDoesNotRetryOtherFailures(t *testing.T) {
+	t.Parallel()
+	d, devs := busyFake()
+	d.masterErr = unix.EPERM
+	disp, _ := fakeDisplay(t, devs, nil)
+	if len(disp.Outputs()) != 0 {
+		t.Fatal("a card without master has outputs")
+	}
+	assertNoEvent(t, disp)
 }
