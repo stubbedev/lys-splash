@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/stubbedev/lys-splash/internal/protocol"
 )
 
@@ -232,7 +234,7 @@ func (c *Client) options(args []string) (*action, error) {
 
 func waitQuit(s *session) (int, error) {
 	_, err := s.c.Read(make([]byte, 1))
-	if errors.Is(err, io.EOF) {
+	if errors.Is(err, io.EOF) || errors.Is(err, unix.ECONNRESET) {
 		return ExitOK, nil
 	}
 	if err != nil {

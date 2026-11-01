@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"log/slog"
+	"net"
 	"os"
 	"reflect"
 	"strings"
@@ -350,5 +351,38 @@ func TestRunCommand(t *testing.T) {
 	}
 	if _, err := RunCommand(nil, nil); err == nil {
 		t.Error("running no command succeeded")
+	}
+}
+
+func TestWaitTakesAResetForTheDaemonQuitting(t *testing.T) {
+	t.Parallel()
+	name := "@lys-splash-client-test-" + rand.Text()
+	l, err := net.Listen("unix", name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("unix", name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := waitQuit(&session{c: c})
+	if err != nil || got != ExitOK {
+		t.Errorf("a connection the daemon never accepted before quitting: exit %d, %v", got, err)
+	}
+}
+
+func TestWaitFailsWhenTheDaemonSendsData(t *testing.T) {
+	t.Parallel()
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	go func() { _, _ = b.Write([]byte{0}) }()
+	got, err := waitQuit(&session{c: a})
+	if err == nil || got != ExitFailed {
+		t.Errorf("data while waiting: exit %d, %v", got, err)
 	}
 }
