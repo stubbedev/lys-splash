@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/stubbedev/lys-lib v0.1.1-0.20261029154144-c3c0d438dfc8
-	go.yaml.in/yaml/v3 v3.0.5
+	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/image v0.47.0
 	golang.org/x/sys v0.49.0
 )
