@@ -222,11 +222,15 @@ func (d *daemon) loadPrevious() {
 }
 
 func (d *daemon) loop(ctx context.Context) error {
-	tick := time.NewTicker(FrameInterval)
-	defer tick.Stop()
+	ticker := time.NewTicker(FrameInterval)
+	defer ticker.Stop()
 	for {
 		var reply func() error
 		var err error
+		var tick <-chan time.Time
+		if d.animating() {
+			tick = ticker.C
+		}
 		select {
 		case <-ctx.Done():
 			return d.quit(d.cfg.Mode.stopping())
@@ -246,10 +250,7 @@ func (d *daemon) loop(ctx context.Context) error {
 			}
 		case e := <-d.display.Events():
 			err = d.display.Handle(e)
-		case <-tick.C:
-			if !d.animating() {
-				continue
-			}
+		case <-tick:
 			d.state.Phase = (d.state.Phase + 1) % theme.Frames
 			if d.previous > 0 {
 				d.state.Progress = bootProgress(time.Since(d.started), d.previous)

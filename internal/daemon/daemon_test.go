@@ -610,3 +610,34 @@ func TestTypedKeysAreZeroed(t *testing.T) {
 		}
 	}
 }
+
+func TestThrobberStopsWhileHiddenAndResumes(t *testing.T) {
+	t.Parallel()
+	r := start(t, setup{mode: Boot, screens: 1})
+	screen := r.display.screens[0].(*fakeScreen)
+	presents := func() int {
+		screen.mu.Lock()
+		defer screen.mu.Unlock()
+		return len(screen.presents)
+	}
+	advances := func() {
+		t.Helper()
+		from := presents()
+		deadline := time.Now().Add(5 * time.Second)
+		for presents() <= from {
+			if time.Now().After(deadline) {
+				t.Fatalf("the throbber did not step in 5s, at %d presents", from)
+			}
+			time.Sleep(FrameInterval)
+		}
+	}
+	advances()
+	r.call(t, protocol.HideSplash{}, protocol.Ack{})
+	hidden := presents()
+	time.Sleep(5 * FrameInterval)
+	if got := presents(); got != hidden {
+		t.Errorf("a hidden splash presented %d frames", got-hidden)
+	}
+	r.call(t, protocol.ShowSplash{}, protocol.Ack{})
+	advances()
+}
