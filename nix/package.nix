@@ -1,4 +1,4 @@
-{self, ...}: {
+{
   perSystem = {
     lib,
     pkgs,
@@ -11,21 +11,23 @@
       "|splash"
       "|rhgb"
     ];
+    src = lib.fileset.toSource {
+      root = ../.;
+      fileset = lib.fileset.difference (lib.fileset.gitTracked ../.) (
+        lib.fileset.unions [
+          ../flake.nix
+          ../flake.lock
+          ../nix
+          ../docs
+        ]
+      );
+    };
   in {
     packages.default = pkgs.buildGo127Module {
       pname = "lys-splash";
-      version = "0-unstable-${self.lastModifiedDate or "0"}";
+      version = "0-unstable-${lib.substring 0 8 (builtins.unsafeDiscardStringContext (baseNameOf src))}";
 
-      src = lib.fileset.toSource {
-        root = ../.;
-        fileset = lib.fileset.difference (lib.fileset.gitTracked ../.) (
-          lib.fileset.unions [
-            ../flake.nix
-            ../flake.lock
-            ../nix
-          ]
-        );
-      };
+      inherit src;
 
       vendorHash = "sha256-lid0wTDXX6N4STsv2wZ2DoKGRPzLsyEkWM+1+2IlbKM=";
 
