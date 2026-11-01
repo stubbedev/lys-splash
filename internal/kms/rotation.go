@@ -84,7 +84,8 @@ type Frame struct {
 	Size   image.Point
 }
 
-const bytesPerPixel = 4
+// BytesPerPixel is the size of a Frame's pixel.
+const BytesPerPixel = 4
 
 // Blit copies rectangle r of the upright frame src into dst, turned by rot;
 // dst is the scanout buffer, of size rot.View(src.Size) turned back.
@@ -94,10 +95,10 @@ func Blit(dst, src Frame, r image.Rectangle, rot Rotation) {
 		return
 	}
 	if rot == Upright {
-		n := r.Dx() * bytesPerPixel
+		n := r.Dx() * BytesPerPixel
 		for y := r.Min.Y; y < r.Max.Y; y++ {
-			s := y*src.Stride + r.Min.X*bytesPerPixel
-			d := y*dst.Stride + r.Min.X*bytesPerPixel
+			s := y*src.Stride + r.Min.X*BytesPerPixel
+			d := y*dst.Stride + r.Min.X*BytesPerPixel
 			copy(dst.Pix[d:d+n], src.Pix[s:s+n])
 		}
 		return
@@ -120,11 +121,11 @@ const blitTile = 32
 func blitTurned(dst, src Frame, d image.Rectangle, rot Rotation) {
 	for dy := d.Min.Y; dy < d.Max.Y; dy++ {
 		x, y, stepX, stepY := rot.source(src.Size, d.Min.X, dy)
-		at, step := y*src.Stride+x*bytesPerPixel, stepY*src.Stride+stepX*bytesPerPixel
-		row := dst.Pix[dy*dst.Stride+d.Min.X*bytesPerPixel : dy*dst.Stride+d.Max.X*bytesPerPixel]
-		for len(row) >= bytesPerPixel {
+		at, step := y*src.Stride+x*BytesPerPixel, stepY*src.Stride+stepX*BytesPerPixel
+		row := dst.Pix[dy*dst.Stride+d.Min.X*BytesPerPixel : dy*dst.Stride+d.Max.X*BytesPerPixel]
+		for len(row) >= BytesPerPixel {
 			binary.LittleEndian.PutUint32(row, binary.LittleEndian.Uint32(src.Pix[at:]))
-			row = row[bytesPerPixel:]
+			row = row[BytesPerPixel:]
 			at += step
 		}
 	}

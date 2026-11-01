@@ -436,7 +436,7 @@ func (o *Output) allocate() error {
 		}
 	}
 	view := o.rotation.View(size)
-	stride := view.X * bytesPerPixel
+	stride := view.X * BytesPerPixel
 	o.frame = Frame{Pix: make([]byte, stride*view.Y), Stride: stride, Size: view}
 	return nil
 }

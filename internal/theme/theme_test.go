@@ -399,3 +399,47 @@ func TestDotsOnlyRedrawWhenTheLitDotMoves(t *testing.T) {
 		t.Errorf("a turn of the dots damaged %d frames, want %d", damaged, dotCount)
 	}
 }
+
+func TestThrobberStepsMatchAFullRedrawOnEveryTurn(t *testing.T) {
+	t.Parallel()
+	dots := Default()
+	dots.Throbber = Dots
+	themes := map[string]Theme{"spinner": Default(), "dots": dots}
+	for name, th := range themes {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			size := image.Pt(800, 600)
+			r := renderer(t, th, nil)
+			full := renderer(t, th, nil)
+			for _, scale := range []int{1, 2} {
+				f := frame(size)
+				prev := State{}
+				draw(t, r, f, scale, nil, prev)
+				for phase := 1; phase <= 2*Frames+1; phase++ {
+					cur := State{Phase: phase % Frames}
+					draw(t, r, f, scale, &prev, cur)
+					fresh := frame(size)
+					draw(t, full, fresh, scale, nil, cur)
+					if !bytes.Equal(fresh.Pix, f.Pix) {
+						t.Fatalf("scale %d, step %d differs from a full redraw", scale, phase)
+					}
+					prev = cur
+				}
+			}
+		})
+	}
+}
+
+func TestThrobberOffTheFrameDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	size := image.Pt(30, 30)
+	r := renderer(t, Default(), nil)
+	f := frame(size)
+	prev := State{}
+	draw(t, r, f, 1, nil, prev)
+	for phase := 1; phase <= Frames; phase++ {
+		cur := State{Phase: phase}
+		draw(t, r, f, 1, &prev, cur)
+		prev = cur
+	}
+}

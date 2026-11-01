@@ -58,6 +58,12 @@ type Renderer struct {
 	face  *render.Typeface
 	bgrt  *BGRT
 	logos map[int]*render.Icon
+	steps map[throbberStep][]byte
+}
+
+type throbberStep struct {
+	scale int
+	step  int
 }
 
 // NewRenderer prepares drawing with t; bgrt is the firmware's logo, nil
@@ -70,7 +76,7 @@ func NewRenderer(t Theme, bgrt *BGRT) (*Renderer, error) {
 	if t.Logo == LysLogo {
 		bgrt = nil
 	}
-	return &Renderer{theme: t, face: face, bgrt: bgrt, logos: map[int]*render.Icon{}}, nil
+	return &Renderer{theme: t, face: face, bgrt: bgrt, logos: map[int]*render.Icon{}, steps: map[throbberStep][]byte{}}, nil
 }
 
 type layout struct {
@@ -166,8 +172,7 @@ func (r *Renderer) Draw(f kms.Frame, scale int, prev *State, cur State) (image.R
 		r.busy(cv, l, cur)
 		damage = damage.Union(l.busy)
 	case !cur.Updating && r.step(prev.Phase) != r.step(cur.Phase):
-		r.clear(cv, l.throb)
-		r.throbber(cv, l, cur.Phase)
+		r.stepThrobber(f, cv, l, cur.Phase)
 		damage = damage.Union(l.throb)
 	}
 	if bootShown(*prev) != bootShown(cur) || bootShown(cur) && prev.Progress != cur.Progress {
@@ -241,6 +246,36 @@ func (r *Renderer) step(phase int) int {
 		return phase % Frames * dotCount / Frames
 	}
 	return phase % Frames
+}
+
+// stepThrobber brings the throbber's rectangle to phase. Each picture is
+// computed per pixel once and copied from then on, since a boot repeats the
+// same few dozen for as long as it lasts.
+func (r *Renderer) stepThrobber(f kms.Frame, cv *render.Canvas, l layout, phase int) {
+	at := l.throb
+	if !at.In(image.Rectangle{Max: f.Size}) {
+		r.clear(cv, at)
+		r.throbber(cv, l, phase)
+		return
+	}
+	key := throbberStep{l.scale, r.step(phase)}
+	row := at.Dx() * kms.BytesPerPixel
+	saved, cached := r.steps[key]
+	if !cached {
+		r.clear(cv, at)
+		r.throbber(cv, l, phase)
+		saved = make([]byte, row*at.Dy())
+		r.steps[key] = saved
+	}
+	for y := range at.Dy() {
+		shown := f.Pix[(at.Min.Y+y)*f.Stride+at.Min.X*kms.BytesPerPixel:][:row]
+		kept := saved[y*row:][:row]
+		if cached {
+			copy(shown, kept)
+		} else {
+			copy(kept, shown)
+		}
+	}
 }
 
 func (r *Renderer) throbber(cv *render.Canvas, l layout, phase int) {
