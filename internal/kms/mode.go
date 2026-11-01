@@ -3,10 +3,10 @@ package kms
 import (
 	"errors"
 	"image"
-	"math"
 	"slices"
 
 	"github.com/stubbedev/lys-lib/drm"
+	"github.com/stubbedev/lys-lib/third_party/gomath"
 )
 
 var errNoMode = errors.New("kms: the connector lists no mode")
@@ -91,8 +91,8 @@ func physicalScale(size image.Point, mm [2]uint32) int {
 	if mm[0] == 0 || mm[1] == 0 {
 		return 1
 	}
-	inches := math.Hypot(float64(mm[0]), float64(mm[1])) / 25.4
-	dpi := math.Hypot(float64(size.X), float64(size.Y)) / inches
+	inches := gomath.Hypot(float64(mm[0]), float64(mm[1])) / 25.4
+	dpi := gomath.Hypot(float64(size.X), float64(size.Y)) / inches
 	target := 135.0
 	if inches >= 20 {
 		target = 110
