@@ -25,7 +25,7 @@ build:
 
 # Run nixpkgs' plymouth client against the server, in the nix sandbox.
 plymouth-client:
-    nix build --no-link -L .#checks.x86_64-linux.plymouth-client
+    nix build --no-link -L .#checks.{{ arch() }}-{{ os() }}.plymouth-client
 
 # Build an initramfs-tools image with the compat output in an Ubuntu container.
 initramfs-tools image="ubuntu:24.04":
