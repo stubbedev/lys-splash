@@ -230,7 +230,7 @@ func serve(o options, log *slog.Logger) (err error) {
 	var vt daemon.Terminal
 	switch v, err := console.OpenActive(console.SystemPaths); {
 	case errors.Is(err, console.ErrNoVT):
-		log.Info("no VT: prompts need a graphical output", "err", err)
+		log.Info("no VT: no keys are read, so prompts get no answer", "err", err)
 	case err != nil:
 		log.Warn("running without the VT", "err", err)
 	default:
