@@ -285,8 +285,8 @@ func (r *Renderer) throbber(cv *render.Canvas, l layout, phase int) {
 	step := r.step(phase)
 	switch r.theme.Throbber {
 	case Spinner:
-		width := size / 8
-		radius := size/2 - width
+		width := float64(size / 8)
+		radius := float64(size/2) - width
 		cv.Arc(float64(c.X), float64(c.Y), radius, width, 0, 2*math.Pi, dim)
 		cv.Arc(float64(c.X), float64(c.Y), radius, width, 2*math.Pi*float64(step)/Frames-math.Pi/2, math.Pi/2, r.theme.Accent)
 	case Dots:
