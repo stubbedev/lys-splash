@@ -6,7 +6,8 @@
 # switch to the real root, chrooted into it; plymouth --ping through the link
 # answers; a password typed on the German layout arrives with its
 # characters; Esc shows the boot messages and Esc again the splash; the
-# greeter, a display manager following the README's contract, keeps
+# greeter, a display manager following the contract in
+# docs/guide/how-it-works.md, keeps
 # lys-splash-quit and the getty on tty1 from running, and its hand-over
 # (deactivate, its compositor opens the card, quit --retain-splash) keeps
 # the frame on screen and records the boot's duration; and a reboot shows

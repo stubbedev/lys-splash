@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the compat output into Ubuntu as the README says, builds an
+# Installs the compat output into Ubuntu as docs/guide/install.md says, builds an
 # initramfs-tools image there and checks that it holds the splash, the
 # plymouth and plymouthd links and the scripts in initramfs-tools' order.
 set -euo pipefail

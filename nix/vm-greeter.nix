@@ -1,6 +1,7 @@
 # lys-splash hands the screen to lys-login's greeter on lys-wm without a
 # blank: the splash boots through the NixOS module on virtio-gpu, and
-# lys-login, the display manager, follows the README's contract. The
+# lys-login, the display manager, follows the contract in
+# docs/guide/how-it-works.md. The
 # greeter's start waits on the test, which then dumps the screen as fast as
 # the VM keeps up from the splash's last frame until the greeter shows, and
 # reads the kernel's DRM log from that point on.
