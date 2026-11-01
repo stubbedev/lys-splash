@@ -410,6 +410,8 @@ type Output struct {
 	flipping  bool
 	pending   bool
 	damage    image.Rectangle
+	clips     uint32
+	clipsOf   image.Rectangle
 }
 
 type buffer struct {
@@ -463,6 +465,10 @@ func (o *Output) release(retain bool) error {
 	if o.modeBlob != 0 {
 		errs = append(errs, dev.DestroyBlob(o.modeBlob))
 		o.modeBlob = 0
+	}
+	if o.clips != 0 {
+		errs = append(errs, dev.DestroyBlob(o.clips))
+		o.clips = 0
 	}
 	o.crtc.taken, o.plane.taken = false, false
 	if err := errors.Join(errs...); err != nil {
@@ -525,13 +531,6 @@ func (o *Output) flip() error {
 	if err != nil {
 		return err
 	}
-	if clips != 0 {
-		defer func() {
-			if derr := o.card.dev.DestroyBlob(clips); derr != nil {
-				o.card.log.Warn("destroying the damage clips", "connector", o.name, "err", derr)
-			}
-		}()
-	}
 	if o.inherited && !o.committed {
 		o.request(b.fb, clips)
 		if err := o.card.dev.Commit(&o.card.req, drm.AtomicTestOnly, 0); err != nil {
@@ -553,11 +552,17 @@ func (o *Output) flip() error {
 	return nil
 }
 
+// damageClips is the blob of the damage rectangles for this commit, the last
+// one again when the damage is where it was: an animation damages the same
+// rectangle frame after frame.
 func (o *Output) damageClips() (uint32, error) {
 	if _, ok := o.plane.props["FB_DAMAGE_CLIPS"]; !ok || o.damage.Empty() || o.modeset {
 		return 0, nil
 	}
 	r := o.rotation.Device(o.frame.Size, o.damage)
+	if o.clips != 0 && r == o.clipsOf {
+		return o.clips, nil
+	}
 	var rect [16]byte
 	for i, v := range []int{r.Min.X, r.Min.Y, r.Max.X, r.Max.Y} {
 		binary.NativeEndian.PutUint32(rect[i*4:], intconv.Uint32Bits(intconv.Must[int32](v)))
@@ -566,6 +571,12 @@ func (o *Output) damageClips() (uint32, error) {
 	if err != nil {
 		return 0, fmt.Errorf("kms: %s: damage clips for %s: %w", o.card.dev.Path(), o.name, err)
 	}
+	if o.clips != 0 {
+		if derr := o.card.dev.DestroyBlob(o.clips); derr != nil {
+			o.card.log.Warn("destroying the damage clips", "connector", o.name, "err", derr)
+		}
+	}
+	o.clips, o.clipsOf = id, r
 	return id, nil
 }
 

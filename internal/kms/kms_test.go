@@ -401,10 +401,6 @@ func TestFlipsArePacedAndDamageLimited(t *testing.T) {
 	if len(cs) != 2 {
 		t.Fatalf("%d commits, want 2: the third Present waits for the flip", len(cs))
 	}
-	clips := d.blobs[uint32(cs[1].values[20]["FB_DAMAGE_CLIPS"])]
-	if clips != nil {
-		t.Error("the damage clips blob outlived its commit")
-	}
 	second := o.bufs[1-o.back].dumb
 	dev := Frame{Pix: second.Pix, Stride: int(second.Pitch), Size: f.Size}
 	if got := pixelAt(dev, 11, 11); got != 0xffabcdef {
@@ -852,4 +848,48 @@ func TestDisplayDoesNotRetryOtherFailures(t *testing.T) {
 		t.Fatal("a card without master has outputs")
 	}
 	assertNoEvent(t, disp)
+}
+
+func TestDamageClipsBlobIsReusedWhileTheDamageStays(t *testing.T) {
+	t.Parallel()
+	d := newFakeDevice("/dev/dri/card0", 1)
+	d.connect(40, [2]uint32{531, 299}, mode(64, 32, true))
+	c := openFake(t, d, false, &Scaler{})
+	o := c.Outputs()[0]
+	step := func(r image.Rectangle) uint32 {
+		t.Helper()
+		if err := o.Present(r); err != nil {
+			t.Fatal(err)
+		}
+		cs := d.real()
+		if err := c.Flipped(drm.FlipEvent{UserData: 10}); err != nil {
+			t.Fatal(err)
+		}
+		return uint32(cs[len(cs)-1].values[20]["FB_DAMAGE_CLIPS"])
+	}
+	step(image.Rectangle{Max: o.Frame().Size})
+	base := len(d.blobs)
+	throbber := image.Rect(10, 10, 14, 12)
+	first := step(throbber)
+	for range 10 {
+		if got := step(throbber); got != first {
+			t.Fatalf("the same damage used blob %d after %d", got, first)
+		}
+	}
+	if got := len(d.blobs); got != base+1 {
+		t.Errorf("%d blobs live, want one more than the %d before", got, base)
+	}
+	moved := step(image.Rect(20, 20, 24, 22))
+	if moved == first {
+		t.Fatal("moved damage kept the old blob")
+	}
+	if _, ok := d.blobs[first]; ok {
+		t.Error("the old damage clips blob outlived its replacement")
+	}
+	if err := c.Release(false); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.blobs) != 0 {
+		t.Errorf("release left blobs %v", d.blobs)
+	}
 }
