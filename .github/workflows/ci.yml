@@ -2,7 +2,11 @@ name: ci
 
 on:
   push:
+    paths-ignore:
+      - "docs/**"
   pull_request:
+    paths-ignore:
+      - "docs/**"
 
 permissions:
   contents: read
