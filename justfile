@@ -34,3 +34,7 @@ initramfs-tools image="ubuntu:24.04":
 # Format every Go source in place with gofmt.
 fmt:
     gofmt -w .
+
+# Set nix/package.nix's vendorHash to the hash of the modules go.sum pins.
+vendor-hash:
+    nix run github:stubbedev/lys-ci#vendor-hash -- nix/package.nix .#default.goModules
