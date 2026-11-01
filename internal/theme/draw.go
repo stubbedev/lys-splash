@@ -77,6 +77,7 @@ type layout struct {
 	scale   int
 	logo    image.Rectangle
 	busy    image.Rectangle
+	throb   image.Rectangle
 	boot    image.Rectangle
 	message image.Rectangle
 	prompt  image.Rectangle
@@ -85,6 +86,7 @@ type layout struct {
 const (
 	lysLogoSize   = 128
 	throbberSize  = 40
+	dotCount      = 3
 	barWidth      = 240
 	barHeight     = 8
 	bootBarHeight = 4
@@ -123,6 +125,9 @@ func (r *Renderer) layout(size image.Point, scale int) layout {
 	if up := image.Pt(0, min(overflow, room)); up.Y > 0 {
 		l.busy, l.boot, l.message, l.prompt = l.busy.Sub(up), l.boot.Sub(up), l.message.Sub(up), l.prompt.Sub(up)
 	}
+	n := s(throbberSize)
+	at := l.busy.Min.Add(l.busy.Max).Div(2).Sub(image.Pt(n/2, n/2))
+	l.throb = image.Rectangle{Min: at, Max: at.Add(image.Pt(n, n))}
 	return l
 }
 
@@ -155,10 +160,15 @@ func (r *Renderer) Draw(f kms.Frame, scale int, prev *State, cur State) (image.R
 		return image.Rectangle{}, nil
 	}
 	var damage image.Rectangle
-	if prev.Updating != cur.Updating || cur.Updating && prev.Progress != cur.Progress || !cur.Updating && prev.Phase != cur.Phase {
+	switch {
+	case prev.Updating != cur.Updating || cur.Updating && prev.Progress != cur.Progress:
 		r.clear(cv, l.busy)
 		r.busy(cv, l, cur)
 		damage = damage.Union(l.busy)
+	case !cur.Updating && r.step(prev.Phase) != r.step(cur.Phase):
+		r.clear(cv, l.throb)
+		r.throbber(cv, l, cur.Phase)
+		damage = damage.Union(l.throb)
 	}
 	if bootShown(*prev) != bootShown(cur) || bootShown(cur) && prev.Progress != cur.Progress {
 		r.clear(cv, l.boot)
@@ -216,27 +226,39 @@ func (r *Renderer) dim() render.Color {
 }
 
 func (r *Renderer) busy(cv *render.Canvas, l layout, s State) {
-	dim := r.dim()
-	c := l.busy.Min.Add(l.busy.Max).Div(2)
-	if s.Updating {
-		w, h := barWidth*l.scale, barHeight*l.scale
-		r.bar(cv, image.Rect(c.X-w/2, c.Y-h/2, c.X+w/2, c.Y+h/2), s.Progress)
+	if !s.Updating {
+		r.throbber(cv, l, s.Phase)
 		return
 	}
+	c := l.busy.Min.Add(l.busy.Max).Div(2)
+	w, h := barWidth*l.scale, barHeight*l.scale
+	r.bar(cv, image.Rect(c.X-w/2, c.Y-h/2, c.X+w/2, c.Y+h/2), s.Progress)
+}
+
+// step is which of the throbber's distinct pictures phase shows.
+func (r *Renderer) step(phase int) int {
+	if r.theme.Throbber == Dots {
+		return phase % Frames * dotCount / Frames
+	}
+	return phase % Frames
+}
+
+func (r *Renderer) throbber(cv *render.Canvas, l layout, phase int) {
+	dim := r.dim()
+	c := l.throb.Min.Add(l.throb.Max).Div(2)
 	size := float64(throbberSize * l.scale)
-	phase := float64(s.Phase%Frames) / Frames
+	step := r.step(phase)
 	switch r.theme.Throbber {
 	case Spinner:
 		width := size / 8
 		radius := size/2 - width
 		cv.Arc(float64(c.X), float64(c.Y), radius, width, 0, 2*math.Pi, dim)
-		cv.Arc(float64(c.X), float64(c.Y), radius, width, 2*math.Pi*phase-math.Pi/2, math.Pi/2, r.theme.Accent)
+		cv.Arc(float64(c.X), float64(c.Y), radius, width, 2*math.Pi*float64(step)/Frames-math.Pi/2, math.Pi/2, r.theme.Accent)
 	case Dots:
 		d := int(size / 4)
-		lit := s.Phase % Frames * 3 / Frames
-		for i := range 3 {
+		for i := range dotCount {
 			col := dim
-			if i == lit {
+			if i == step {
 				col = r.theme.Accent
 			}
 			x := c.X + (i-1)*d*3/2

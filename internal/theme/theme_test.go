@@ -287,8 +287,8 @@ func TestThrobberDamageCoversOnlyTheThrobber(t *testing.T) {
 	next.Phase = 1
 	d := draw(t, r, f, 1, &prev, next)
 	l := r.layout(size, 1)
-	if d != l.busy {
-		t.Fatalf("a throbber step damaged %v, want the throbber's %v", d, l.busy)
+	if d != l.throb {
+		t.Fatalf("a throbber step damaged %v, want the throbber's %v", d, l.throb)
 	}
 	changed := image.Rectangle{}
 	for y := range size.Y {
@@ -370,5 +370,32 @@ func TestDrawRefusesABadScale(t *testing.T) {
 	t.Parallel()
 	if _, err := renderer(t, Default(), nil).Draw(frame(image.Pt(8, 8)), 0, nil, State{}); err == nil {
 		t.Error("Draw at scale 0 succeeded")
+	}
+}
+
+func TestDotsOnlyRedrawWhenTheLitDotMoves(t *testing.T) {
+	t.Parallel()
+	size := image.Pt(640, 400)
+	dots := Default()
+	dots.Throbber = Dots
+	r := renderer(t, dots, nil)
+	f := frame(size)
+	prev := State{}
+	draw(t, r, f, 1, nil, prev)
+	damaged := 0
+	for phase := 1; phase <= Frames; phase++ {
+		cur := State{Phase: phase % Frames}
+		if d := draw(t, r, f, 1, &prev, cur); !d.Empty() {
+			damaged++
+		}
+		fresh := frame(size)
+		draw(t, r, fresh, 1, nil, cur)
+		if !bytes.Equal(fresh.Pix, f.Pix) {
+			t.Fatalf("phase %d differs from a full redraw", cur.Phase)
+		}
+		prev = cur
+	}
+	if damaged != dotCount {
+		t.Errorf("a turn of the dots damaged %d frames, want %d", damaged, dotCount)
 	}
 }
