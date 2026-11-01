@@ -1,5 +1,4 @@
 import re
-from datetime import timedelta
 
 lit = re.compile(r'msg="lit an output" card=card0 connector=(\S+) size=\((\d+),(\d+)\) scale=(\d+) rotation="?([a-z ]+?)"? "kept')
 
