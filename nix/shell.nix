@@ -1,4 +1,4 @@
-{
+{inputs, ...}: {
   perSystem = {
     pkgs,
     self',
@@ -14,6 +14,7 @@
         just
         git
         gh
+        "${inputs.lys-ci}"
       ];
 
       env = {
