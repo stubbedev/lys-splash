@@ -24,7 +24,10 @@
    messages. `lys-splash-quit-wait.service` holds logins until then.
 
 The splash records how long it showed in `/var/lib/lys-splash/boot-duration`
-when it quits, if the root became writable. The next boot's progress bar runs
+when it quits, if it came through the switch to the real root and the root became
+writable. A boot splash started on a running system, as NixOS does when a
+configuration first adds the unit, records nothing, so it cannot leave the next
+boot a duration of a fraction of a second. The next boot's progress bar runs
 against that time, and appears at the switch to the real root when the initrd
 does not hold the file. A crash leaves the previous value, because the file is
 replaced whole.

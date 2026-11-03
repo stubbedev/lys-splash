@@ -39,6 +39,7 @@ in
     + expect "no assertion names boot.lys-splash.enable and boot.plymouth.enable: ${toString withPlymouth}" (names ["boot.lys-splash.enable" "boot.plymouth.enable"] withPlymouth)
     + expect "splash is not on the kernel command line" (builtins.elem "splash" enabled.boot.kernelParams)
     + expect "the system does not start lys-splash-quit" (builtins.elem "multi-user.target" enabled.systemd.services.lys-splash-quit.wantedBy)
+    + expect "switching configuration restarts the boot splash on the running system" (!enabled.systemd.services.lys-splash-start.restartIfChanged)
     + ''
       mkdir root
       zstd -dc ${enabled.system.build.initialRamdisk}/${enabled.system.boot.loader.initrdFile} | (cd root && cpio -idm --quiet)

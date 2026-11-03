@@ -106,17 +106,22 @@ func TestBootRecordsItsDurationOnceWritable(t *testing.T) {
 	tests := []struct {
 		name     string
 		mode     Mode
+		switched bool
 		writable bool
 		recorded bool
 	}{
-		{"boot with a writable root", Boot, true, true},
-		{"boot with a read-only root", Boot, false, false},
-		{"shutdown", Shutdown, true, false},
+		{"boot with a writable root", Boot, true, true, true},
+		{"boot with a read-only root", Boot, true, false, false},
+		{"started on a running system", Boot, false, true, false},
+		{"shutdown", Shutdown, true, true, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			r := start(t, setup{mode: tc.mode, screens: 1})
+			if tc.switched {
+				r.call(t, protocol.NewRoot{Dir: "/sysroot"}, protocol.Ack{})
+			}
 			if tc.writable {
 				r.call(t, protocol.SystemInitialized{}, protocol.Ack{})
 			}

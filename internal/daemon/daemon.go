@@ -117,8 +117,8 @@ type Config struct {
 	// Chroot switches into the new root, as `R` asks.
 	Chroot func(dir string) error
 	// BootDuration is the file a boot reads the previous boot's duration
-	// from, for its progress, and records its own in once the root is
-	// writable: BootDurationFile.
+	// from, for its progress, and records its own in if it came through the
+	// switch to a real root that became writable: BootDurationFile.
 	BootDuration string
 	Log          *slog.Logger
 }
@@ -152,6 +152,7 @@ type daemon struct {
 	quitted  bool
 	started  time.Time
 	previous time.Duration
+	switched bool
 	writable bool
 }
 
@@ -411,6 +412,7 @@ func (d *daemon) request(c *server.Call) (func() error, error) {
 		if err := d.cfg.Chroot(r.Dir); err != nil {
 			return answer(protocol.Nak{}), fmt.Errorf("daemon: switch to the new root %s: %w", r.Dir, err)
 		}
+		d.switched = true
 		if d.cfg.Mode == Boot && d.previous == 0 {
 			d.loadPrevious()
 		}
@@ -557,7 +559,7 @@ func (d *daemon) quit(retain bool) error {
 	d.quitted = true
 	d.cfg.Log.Info("quitting", "mode", d.cfg.Mode, "retain", retain)
 	errs := []error{d.asker.Close()}
-	if d.cfg.Mode == Boot && d.writable {
+	if d.cfg.Mode == Boot && d.switched && d.writable {
 		errs = append(errs, SaveBootDuration(d.cfg.BootDuration, time.Since(d.started)))
 	}
 	if err := d.display.Close(retain); errors.Is(err, drm.ErrNoCloseFB) {

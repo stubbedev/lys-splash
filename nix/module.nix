@@ -57,7 +57,9 @@
       };
 
       systemd.packages = [cfg.package];
-      systemd.services = lib.recursiveUpdate (enable "service" null) (askPassword config.systemd.package);
+      systemd.services = lib.recursiveUpdate (lib.recursiveUpdate (enable "service" null) (askPassword config.systemd.package)) {
+        lys-splash-start.restartIfChanged = false;
+      };
       systemd.paths = enable "path" null;
       environment.systemPackages = [cfg.package];
       environment.etc."lys-splash/theme.yaml" = lib.mkIf (cfg.theme != {}) {source = themeFile;};
