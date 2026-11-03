@@ -193,6 +193,7 @@ type setup struct {
 	mode     Mode
 	noVT     bool
 	screens  int
+	size     image.Point
 	chroot   func(string) error
 	duration string
 	log      *slog.Logger
@@ -204,8 +205,12 @@ func start(t *testing.T, s setup) *run {
 	if r.duration == "" {
 		r.duration = filepath.Join(t.TempDir(), "boot-duration")
 	}
+	size := s.size
+	if size == (image.Point{}) {
+		size = image.Pt(320, 240)
+	}
 	for range s.screens {
-		r.display.screens = append(r.display.screens, newScreen(image.Pt(320, 240)))
+		r.display.screens = append(r.display.screens, newScreen(size))
 	}
 	var vt Terminal
 	if !s.noVT {
@@ -616,33 +621,61 @@ func TestTypedKeysAreZeroed(t *testing.T) {
 	}
 }
 
+func (r *run) presents() int {
+	screen := r.display.screens[0].(*fakeScreen)
+	screen.mu.Lock()
+	defer screen.mu.Unlock()
+	return len(screen.presents)
+}
+
+func (r *run) presentsAfter(t *testing.T, from int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for r.presents() <= from {
+		if time.Now().After(deadline) {
+			t.Fatalf("the screen did not present in 5s, at %d presents", from)
+		}
+		time.Sleep(FrameInterval)
+	}
+}
+
+func (r *run) advances(t *testing.T) {
+	t.Helper()
+	r.presentsAfter(t, r.presents())
+}
+
+func (r *run) holdsStill(t *testing.T, what string) {
+	t.Helper()
+	from := r.presents()
+	time.Sleep(5 * FrameInterval)
+	if got := r.presents(); got != from {
+		t.Errorf("%s presented %d frames", what, got-from)
+	}
+}
+
 func TestThrobberStopsWhileHiddenAndResumes(t *testing.T) {
 	t.Parallel()
 	r := start(t, setup{mode: Boot, screens: 1})
-	screen := r.display.screens[0].(*fakeScreen)
-	presents := func() int {
-		screen.mu.Lock()
-		defer screen.mu.Unlock()
-		return len(screen.presents)
-	}
-	advances := func() {
-		t.Helper()
-		from := presents()
-		deadline := time.Now().Add(5 * time.Second)
-		for presents() <= from {
-			if time.Now().After(deadline) {
-				t.Fatalf("the throbber did not step in 5s, at %d presents", from)
-			}
-			time.Sleep(FrameInterval)
-		}
-	}
-	advances()
+	r.advances(t)
 	r.call(t, protocol.HideSplash{}, protocol.Ack{})
-	hidden := presents()
-	time.Sleep(5 * FrameInterval)
-	if got := presents(); got != hidden {
-		t.Errorf("a hidden splash presented %d frames", got-hidden)
-	}
+	r.holdsStill(t, "a hidden splash")
 	r.call(t, protocol.ShowSplash{}, protocol.Ack{})
-	advances()
+	r.advances(t)
+}
+
+func TestThrobberStopsWhileAPromptWaitsAndResumes(t *testing.T) {
+	t.Parallel()
+	r := start(t, setup{mode: Boot, screens: 1, size: image.Pt(1280, 800)})
+	r.advances(t)
+	c := r.dial(t)
+	r.send(t, c, protocol.Password{Prompt: "Disk:"}, protocol.Ping{})
+	expect(t, c, protocol.Ack{})
+	r.holdsStill(t, "a splash waiting on a password")
+	waiting := r.presents()
+	r.typeKeys("h")
+	r.presentsAfter(t, waiting)
+	r.holdsStill(t, "a splash waiting on the rest of a password")
+	r.typeKeys("unter2\r")
+	expect(t, c, protocol.Answer{Data: []byte("hunter2")})
+	r.advances(t)
 }

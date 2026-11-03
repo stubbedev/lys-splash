@@ -371,7 +371,7 @@ func (d *daemon) toggleDetails() error {
 }
 
 func (d *daemon) animating() bool {
-	return !d.paused && !d.inactive && !d.state.Updating && !d.state.Hidden && d.graphics
+	return !d.paused && !d.inactive && !d.state.Updating && !d.state.Hidden && d.state.Prompt.Kind == theme.NoPrompt && d.graphics
 }
 
 func (d *daemon) canAsk() bool {

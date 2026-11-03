@@ -84,7 +84,9 @@ keeps that text for two uses: <kbd>Esc</kbd> shows it, and a quit without
 
 Prompts queue and show one at a time, oldest first. Every password typed is
 cached for the next disk, so one passphrase can unlock several. Every buffer that
-held a secret is zeroed once it is no longer needed.
+held a secret is zeroed once it is no longer needed. The throbber and the boot
+progress hold still until a prompt is answered, so a prompt that waits for hours
+redraws only when a key is typed.
 
 The keyboard comes from the active virtual terminal. On a kernel without virtual
 terminals, prompts get no answer.
