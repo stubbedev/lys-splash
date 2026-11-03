@@ -119,8 +119,9 @@ type Config struct {
 	// BootDuration is the file a boot reads the previous boot's duration
 	// from, for its progress, and records its own in if it came through the
 	// switch to a real root that became writable: BootDurationFile.
-	BootDuration string
-	Log          *slog.Logger
+	BootDuration     string
+	SaveBootDuration func(path string, d time.Duration) error
+	Log              *slog.Logger
 }
 
 type event struct {
@@ -185,7 +186,7 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, dev D
 	}
 	defer func() {
 		if !d.quitted {
-			err = errors.Join(err, d.quit(false))
+			err = errors.Join(err, d.quit(false), d.recordDuration())
 		}
 	}()
 	served := make(chan error, 1)
@@ -234,12 +235,12 @@ func (d *daemon) loop(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
-			return d.quit(d.cfg.Mode.stopping())
+			return errors.Join(d.quit(d.cfg.Mode.stopping()), d.recordDuration())
 		case e := <-d.inbox:
 			switch {
 			case e.call != nil:
 				if q, ok := e.call.Request.(protocol.Quit); ok {
-					return errors.Join(d.quit(q.Retain), e.call.Reply(protocol.Ack{}))
+					return errors.Join(d.quit(q.Retain), e.call.Reply(protocol.Ack{}), d.recordDuration())
 				}
 				reply, err = d.request(e.call)
 			case e.hangup != nil:
@@ -559,9 +560,6 @@ func (d *daemon) quit(retain bool) error {
 	d.quitted = true
 	d.cfg.Log.Info("quitting", "mode", d.cfg.Mode, "retain", retain)
 	errs := []error{d.asker.Close()}
-	if d.cfg.Mode == Boot && d.switched && d.writable {
-		errs = append(errs, SaveBootDuration(d.cfg.BootDuration, time.Since(d.started)))
-	}
 	if err := d.display.Close(retain); errors.Is(err, drm.ErrNoCloseFB) {
 		d.cfg.Log.Warn("this kernel has no CLOSEFB, so the splash's last frame goes away with it", "err", err)
 	} else {
@@ -582,4 +580,11 @@ func (d *daemon) quit(retain bool) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (d *daemon) recordDuration() error {
+	if d.cfg.Mode != Boot || !d.switched || !d.writable {
+		return nil
+	}
+	return d.cfg.SaveBootDuration(d.cfg.BootDuration, time.Since(d.started))
 }

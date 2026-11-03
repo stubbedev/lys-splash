@@ -299,13 +299,14 @@ func serve(o options, log *slog.Logger) (err error) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 	cfg := daemon.Config{
-		Mode:         o.mode,
-		ThemePath:    o.theme,
-		Server:       srv,
-		Notify:       notify,
-		Chroot:       daemon.SwitchRoot,
-		BootDuration: daemon.BootDurationFile,
-		Log:          log,
+		Mode:             o.mode,
+		ThemePath:        o.theme,
+		Server:           srv,
+		Notify:           notify,
+		Chroot:           daemon.SwitchRoot,
+		BootDuration:     daemon.BootDurationFile,
+		SaveBootDuration: daemon.SaveBootDuration,
+		Log:              log,
 	}
 	return daemon.Run(ctx, cfg, t, bgrt, daemon.Devices{Display: daemon.KMS{Display: display}, VT: vt, Console: capture})
 }

@@ -46,11 +46,14 @@ func SaveBootDuration(path string, d time.Duration) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { //nolint:gosec // the boot duration is not secret
 		return fmt.Errorf("daemon: create the directory for %s: %w", path, err)
 	}
-	text := strconv.FormatFloat(d.Seconds(), 'f', 3, 64) + "\n"
-	if err := atomicfile.WriteFile(path, []byte(text), 0o644); err != nil {
+	if err := atomicfile.WriteFile(path, encodeBootDuration(d), 0o644); err != nil {
 		return fmt.Errorf("daemon: record the boot duration: %w", err)
 	}
 	return nil
+}
+
+func encodeBootDuration(d time.Duration) []byte {
+	return []byte(strconv.FormatFloat(d.Seconds(), 'f', 3, 64) + "\n")
 }
 
 // bootProgress is how far along a boot is after elapsed when the previous

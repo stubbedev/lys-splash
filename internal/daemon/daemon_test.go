@@ -196,7 +196,12 @@ type setup struct {
 	size     image.Point
 	chroot   func(string) error
 	duration string
+	save     func(string, time.Duration) error
 	log      *slog.Logger
+}
+
+func saveUnsynced(path string, d time.Duration) error {
+	return os.WriteFile(path, encodeBootDuration(d), 0o600)
 }
 
 func start(t *testing.T, s setup) *run {
@@ -230,7 +235,11 @@ func start(t *testing.T, s setup) *run {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	cfg := Config{Mode: s.mode, Server: listen(t, r.socket), Chroot: chroot, BootDuration: r.duration, Log: log}
+	save := s.save
+	if save == nil {
+		save = saveUnsynced
+	}
+	cfg := Config{Mode: s.mode, Server: listen(t, r.socket), Chroot: chroot, BootDuration: r.duration, SaveBootDuration: save, Log: log}
 	go func() {
 		r.done <- Run(ctx, cfg, theme.Default(), nil, Devices{Display: r.display, VT: vt, Console: r.console})
 	}()

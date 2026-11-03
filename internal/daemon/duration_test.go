@@ -140,6 +140,54 @@ func TestBootRecordsItsDurationOnceWritable(t *testing.T) {
 	}
 }
 
+func TestStalledDurationSaveHoldsNeitherTheQuitNorTheDevices(t *testing.T) {
+	t.Parallel()
+	saving, unstall := make(chan struct{}), make(chan struct{})
+	r := start(t, setup{screens: 1, save: func(path string, d time.Duration) error {
+		close(saving)
+		<-unstall
+		return saveUnsynced(path, d)
+	}})
+	release := sync.OnceFunc(func() { close(unstall) })
+	defer release()
+	r.call(t, protocol.NewRoot{Dir: "/sysroot"}, protocol.Ack{})
+	r.call(t, protocol.SystemInitialized{}, protocol.Ack{})
+	r.call(t, protocol.Quit{}, protocol.Ack{})
+	select {
+	case <-saving:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the quit never saved the duration")
+	}
+	r.display.mu.Lock()
+	closed := r.display.closed
+	r.display.mu.Unlock()
+	if !closed {
+		t.Error("the display is still held during the save")
+	}
+	if got := r.vt.how(); got != "restore" {
+		t.Errorf("the VT was given back by %q during the save, want restore", got)
+	}
+	if got, _ := r.console.released(); got != "restore" {
+		t.Errorf("the console was given back by %q during the save, want restore", got)
+	}
+	select {
+	case err := <-r.done:
+		r.done <- err
+		t.Errorf("Run returned during the save, with %v", err)
+	default:
+	}
+	if _, err := LoadBootDuration(r.duration); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the stalled save already left a duration: %v", err)
+	}
+	release()
+	if err := r.finished(t); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := LoadBootDuration(r.duration); err != nil || d <= 0 {
+		t.Errorf("the quit recorded %v, %v; want a positive duration", d, err)
+	}
+}
+
 type lockedBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer

@@ -30,7 +30,9 @@ configuration first adds the unit, records nothing, so it cannot leave the next
 boot a duration of a fraction of a second. The next boot's progress bar runs
 against that time, and appears at the switch to the real root when the initrd
 does not hold the file. A crash leaves the previous value, because the file is
-replaced whole.
+replaced whole. The splash writes it after it has answered the quit and released
+the screen, the VT and the console, so a disk with a long write queue delays only
+the splash's exit, and with it `lys-splash --wait`, never the hand-over.
 
 ## The units
 
