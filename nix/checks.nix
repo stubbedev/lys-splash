@@ -56,6 +56,7 @@
         inherit pkgs module;
         splash = vmSplash;
       };
+      vm-journal = import ./vm-journal.nix {inherit pkgs;};
       vm-e2e = import ./vm-e2e.nix {
         inherit pkgs module;
         inherit (inputs) lys-login lys-wm;

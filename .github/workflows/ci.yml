@@ -54,7 +54,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        check: [vm-e2e, vm-greeter, vm-boot, vm-splash]
+        check: [vm-e2e, vm-greeter, vm-boot, vm-splash, vm-journal]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

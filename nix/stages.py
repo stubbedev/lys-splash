@@ -6,6 +6,12 @@ gate_marker = "greeter-gate: the greeter may start"
 modeset = re.compile(r"Set \[MODE:|Link \[CONNECTOR:|mode changed|active changed|enable changed|connectors changed|requires full modeset")
 
 
+def whole_output(m, command):
+    name = f"whole-output-{m.name}"
+    m.succeed(f"{{ {command}; }} > /tmp/shared/{name}")
+    return (m.shared_dir / name).read_text(errors="replace")
+
+
 def dump(m, i):
     path = m.out_dir / f"handover-{i:04d}.ppm"
     m.send_monitor_command(f"screendump {path}")
@@ -73,7 +79,7 @@ def hand_over(m):
         assert share(box, greeter) < 0.1, f"dump {i}, after the splash, is neither the splash nor the greeter: it differs from the greeter in {box}"
     print(f"{len(frames)} dumps: the splash until dump {greeter_at}, the greeter from there")
 
-    kernel = m.succeed("dmesg --notime")
+    kernel = whole_output(m, "dmesg --notime")
     assert gate_marker in kernel, "the gate left no mark in the kernel log"
     drm = [line for line in kernel[kernel.rindex(gate_marker):].splitlines()[1:] if "[drm:" in line]
     commits = [line for line in drm if "] committing " in line]
@@ -97,11 +103,13 @@ def reboot_shows_splash(m, splash):
     assert "msg=quitting mode=reboot" not in m.get_console_log(), "the reboot splash quit before the reset"
 
 
-def journal(m):
-    out = m.succeed("journalctl -b --no-pager -o json --output-fields=MESSAGE,UNIT,_SYSTEMD_UNIT")
+def journal_entries(out):
     entries = []
     for line in filter(None, out.split("\n")):
-        e = json.loads(line)
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError as err:
+            raise ValueError(f"the journal has a line that is not JSON ({err}): {line!r}") from err
         if "__MONOTONIC_TIMESTAMP" not in e:
             continue
         msg = e.get("MESSAGE") or ""
@@ -109,6 +117,10 @@ def journal(m):
             msg = bytes(msg).decode(errors="replace")
         entries.append((int(e["__MONOTONIC_TIMESTAMP"]), e.get("UNIT") or e.get("_SYSTEMD_UNIT") or "", msg))
     return entries
+
+
+def journal(m):
+    return journal_entries(whole_output(m, "journalctl -b --no-pager -o json --output-fields=MESSAGE,UNIT,_SYSTEMD_UNIT"))
 
 
 def when(entries, unit, pattern):

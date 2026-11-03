@@ -53,6 +53,7 @@ explicitly. `GOTOOLCHAIN=local` keeps the compiler from downloading itself.
 | `vm-kms-switch` | The splash on simpledrm and then on the native driver as it takes over, in a VM |
 | `vm-splash` | The daemon on virtio-gpu, with the plymouth client and systemd's password agent, then detached as `plymouthd` with its log reaching the journal |
 | `vm-boot` | A boot through the module, on virtio-gpu and without any display |
+| `vm-journal` | Reads a guest's whole journal past a host that drains the VM's shell slowly, which makes QEMU drop what the shell prints |
 | `vm-greeter` | Hands the splash's frame to lys-login's greeter on lys-wm and checks every screen dump on the way |
 | `vm-e2e` | The whole path in one test, each stage failing with its name: OVMF and simpledrm, then virtio-gpu, a LUKS root and a second LUKS disk unlocked by one passphrase typed at the splash, the splash surviving the switch to the real root, nixpkgs' plymouth client, the hand-over to the greeter, the reboot splash, and a machine without a display typing its passphrase at the text fallback |
 
@@ -77,7 +78,7 @@ nix shell nixpkgs#nodejs_22 -c npm run preview
 
 `.github/workflows/ci.yml` runs the gates, the `package`, `units`, `module` and
 `plymouth-client` checks, the initramfs-tools image in Ubuntu, and the VM checks
-`vm-e2e`, `vm-greeter` and `vm-boot` under KVM.
+`vm-e2e`, `vm-greeter`, `vm-boot`, `vm-splash` and `vm-journal` under KVM.
 
 `.github/workflows/security.yml` runs CodeQL (Go and GitHub Actions), Grype and
 govulncheck, uploading findings to code scanning; dependency review gates pull
