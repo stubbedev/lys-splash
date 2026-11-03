@@ -4,6 +4,7 @@ def booted(m):
 
 
 def ask(m, prompt, keys):
+    assert "virtio-keyboard" not in m.send_monitor_command("info qtree"), f"{m.name} types through QEMU's virtio keyboard, which drops keys while the guest probes it"
     unit = f"ask-{m.name}"
     m.succeed(f"systemd-run --no-ask-password --unit={unit} -p StandardOutput=file:/tmp/answer lys-splash ask-for-password --prompt='{prompt}'")
     m.wait_until_succeeds(f"systemctl is-active {unit}", timeout=seconds(5))

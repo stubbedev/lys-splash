@@ -81,6 +81,7 @@
           name = "lys-splash-daemon";
           nodes.machine = {
             virtualisation.qemu.options = ["-vga none" "-device virtio-gpu-pci"];
+            virtualisation.qemu.virtioKeyboard = false;
             systemd.services."getty@tty1".enable = false;
             systemd.services."autovt@tty1".enable = false;
             systemd.suppressedSystemUnits = [
@@ -97,6 +98,7 @@
           };
           testScript = ''
             machine.wait_for_unit("multi-user.target")
+            assert "virtio-keyboard" not in machine.send_monitor_command("info qtree"), "machine types through QEMU's virtio keyboard, which drops keys while the guest probes it"
             machine.succeed("systemd-run --no-ask-password --unit=splash -p Type=notify -p KillMode=mixed lys-splash --mode=boot --pid-file=/run/lys-splash/pid")
             machine.succeed("test -s /run/lys-splash/pid")
             machine.succeed("lys-splash --ping")

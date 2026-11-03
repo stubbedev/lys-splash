@@ -37,6 +37,7 @@
       theme.accent = "#ffb454";
     };
     environment.systemPackages = [plymouthLink];
+    virtualisation.qemu.virtioKeyboard = false;
   };
   quitByTest = {
     systemd.services.lys-splash-quit.wantedBy = lib.mkForce [];
@@ -71,7 +72,6 @@ in
       imports = [splashModule greeter];
       virtualisation.qemu.options = ["-vga none" "-device virtio-gpu-pci" "-action shutdown=pause"];
       boot.initrd.kernelModules = ["virtio_gpu"];
-      virtualisation.qemu.virtioKeyboard = false;
       console.keyMap = "de-latin1";
       systemd.services.lys-splash-reboot.serviceConfig.StandardError = "file:/dev/kmsg";
     };
