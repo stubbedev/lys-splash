@@ -893,3 +893,48 @@ func TestDamageClipsBlobIsReusedWhileTheDamageStays(t *testing.T) {
 		t.Errorf("release left blobs %v", d.blobs)
 	}
 }
+
+func TestClientsMustCloseBeforeRemoval(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		drivers map[string]string
+		want    bool
+	}{
+		{"no cards", nil, false},
+		{"amdgpu", map[string]string{"card0": "amdgpu"}, false},
+		{"nvidia", map[string]string{"card0": "nvidia"}, true},
+		{"nvidia second", map[string]string{"card0": "i915", "card1": "nvidia"}, true},
+		{"a connector is not a card", map[string]string{"card0-DP-1": "nvidia"}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			paths := Paths{Sysfs: t.TempDir()}
+			for name, driver := range tc.drivers {
+				dev := filepath.Join(paths.Sysfs, name, "device")
+				if err := os.MkdirAll(dev, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("../../../bus/pci/drivers/"+driver, filepath.Join(dev, "driver")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := paths.ClientsMustCloseBeforeRemoval()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("ClientsMustCloseBeforeRemoval = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClientsMustCloseBeforeRemovalWithoutSysfs(t *testing.T) {
+	t.Parallel()
+	got, err := Paths{Sysfs: filepath.Join(t.TempDir(), "absent")}.ClientsMustCloseBeforeRemoval()
+	if err != nil || got {
+		t.Errorf("ClientsMustCloseBeforeRemoval = %v, %v, want false, nil", got, err)
+	}
+}

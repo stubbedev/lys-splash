@@ -60,9 +60,17 @@ const RootStorageMarker = '@'
 // the real root. In the shutdown, reboot and kexec modes it keeps
 // systemd-shutdown from killing it, so its card stays open until the power
 // goes: the kernel puts fbdev's console back on the screen when the last
-// file on a card closes, CLOSEFB or not.
-func NeedsReexec(mode Mode, argv0 string, initrd bool) bool {
-	return (mode == Boot && initrd || mode.stopping()) && !strings.HasPrefix(argv0, string(RootStorageMarker))
+// file on a card closes, CLOSEFB or not. With closeBeforeRemoval it goes
+// unmarked in those modes, so systemd-shutdown ends it while the driver can
+// still take the close.
+func NeedsReexec(mode Mode, argv0 string, initrd, closeBeforeRemoval bool) bool {
+	if strings.HasPrefix(argv0, string(RootStorageMarker)) {
+		return false
+	}
+	if mode.stopping() {
+		return !closeBeforeRemoval
+	}
+	return mode == Boot && initrd
 }
 
 // InInitrd reports whether this process runs in the initrd.

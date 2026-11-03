@@ -105,6 +105,7 @@ func parseOptions(name string, args []string, stderr io.Writer) (options, error)
 }
 
 func runDaemon(argv []string, plymouthd bool) int {
+	signal.Ignore(syscall.SIGPIPE)
 	o, err := parseOptions(filepath.Base(argv[0]), argv[1:], os.Stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
@@ -123,7 +124,12 @@ func runDaemon(argv []string, plymouthd bool) int {
 		log.Error("starting", "err", err)
 		return 1
 	}
-	if daemon.NeedsReexec(o.mode, argv[0], initrd) {
+	closeBeforeRemoval, err := kms.SystemPaths.ClientsMustCloseBeforeRemoval()
+	if err != nil {
+		log.Error("starting", "err", err)
+		return 1
+	}
+	if daemon.NeedsReexec(o.mode, argv[0], initrd, closeBeforeRemoval) {
 		marked := append([]string{string(daemon.RootStorageMarker) + argv[0]}, argv[1:]...)
 		err := unix.Exec(selfExe, marked, os.Environ())
 		log.Error("re-executing with argv[0] marked for systemd to spare the splash", "err", err)

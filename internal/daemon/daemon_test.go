@@ -550,23 +550,28 @@ func TestNotifyReady(t *testing.T) {
 func TestNeedsReexec(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		mode   Mode
-		argv0  string
-		initrd bool
-		want   bool
+		mode               Mode
+		argv0              string
+		initrd             bool
+		closeBeforeRemoval bool
+		want               bool
 	}{
-		{Boot, "/bin/lys-splash", true, true},
-		{Boot, "@/bin/lys-splash", true, false},
-		{Boot, "/bin/lys-splash", false, false},
-		{Updates, "/bin/lys-splash", true, false},
-		{Shutdown, "/bin/lys-splash", false, true},
-		{Reboot, "/bin/lys-splash", false, true},
-		{Kexec, "/bin/lys-splash", true, true},
-		{Reboot, "@/bin/lys-splash", false, false},
+		{Boot, "/bin/lys-splash", true, false, true},
+		{Boot, "@/bin/lys-splash", true, false, false},
+		{Boot, "/bin/lys-splash", false, false, false},
+		{Updates, "/bin/lys-splash", true, false, false},
+		{Shutdown, "/bin/lys-splash", false, false, true},
+		{Reboot, "/bin/lys-splash", false, false, true},
+		{Kexec, "/bin/lys-splash", true, false, true},
+		{Reboot, "@/bin/lys-splash", false, false, false},
+		{Boot, "/bin/lys-splash", true, true, true},
+		{Shutdown, "/bin/lys-splash", false, true, false},
+		{Reboot, "/bin/lys-splash", false, true, false},
+		{Kexec, "/bin/lys-splash", false, true, false},
 	}
 	for _, tc := range tests {
-		if got := NeedsReexec(tc.mode, tc.argv0, tc.initrd); got != tc.want {
-			t.Errorf("NeedsReexec(%v, %q, %v) = %v", tc.mode, tc.argv0, tc.initrd, got)
+		if got := NeedsReexec(tc.mode, tc.argv0, tc.initrd, tc.closeBeforeRemoval); got != tc.want {
+			t.Errorf("NeedsReexec(%v, %q, %v, %v) = %v", tc.mode, tc.argv0, tc.initrd, tc.closeBeforeRemoval, got)
 		}
 	}
 }

@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -116,4 +119,37 @@ func TestListenWithADaemonRunningReportsReady(t *testing.T) {
 	if err != nil || string(buf[:n]) != "READY=1" {
 		t.Errorf("the second daemon notified %q, %v; want READY=1", buf[:n], err)
 	}
+}
+
+const deadStderrHelper = "LYS_SPLASH_TEST_DEAD_STDERR"
+
+func TestTheDaemonOutlivesItsStandardErrorsReader(t *testing.T) {
+	t.Parallel()
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.NewFile(uintptr(fds[0]), "stderr")
+	defer stderr.Close()
+	if err := syscall.Close(fds[1]); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestDeadStderrHelper$")
+	cmd.Env = append(os.Environ(), deadStderrHelper+"=1")
+	cmd.Stderr = stderr
+	err = cmd.Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("the daemon's run = %v, want its exit status for the bad option", err)
+	}
+	if code := exit.ExitCode(); code != 1 {
+		t.Errorf("the daemon ended with %v, want exit status 1", exit)
+	}
+}
+
+func TestDeadStderrHelper(t *testing.T) {
+	if os.Getenv(deadStderrHelper) == "" {
+		t.Skip("run by TestTheDaemonOutlivesItsStandardErrorsReader")
+	}
+	os.Exit(runDaemon([]string{"lys-splash", "--mode=bogus"}, false))
 }

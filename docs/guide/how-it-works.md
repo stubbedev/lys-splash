@@ -144,3 +144,14 @@ The shutdown, reboot and kexec splashes never close their cards. They re-execute
 with `@` leading `argv[0]` like the initrd's splash, so `systemd-shutdown` spares
 them, and the power goes with their frame still on screen. A `SIGTERM` in these
 modes keeps the frame too; in `boot` and `updates` it quits as `quit` does.
+
+The exception is a card driven by `nvidia`. Its PCI shutdown removes the DRM
+device and frees its state, and requires every client to be gone first, so a
+splash that closed its card later would oops the kernel and hang the machine
+short of the reset. On such a machine the shutdown splashes stay unmarked:
+`systemd-shutdown`'s `SIGTERM` ends them while the driver is still whole, and the
+console shows for the last moments.
+
+The daemon ignores `SIGPIPE`. Its standard error is usually a socket to journald,
+which goes before the splash does, and Go otherwise turns a failed write to it
+into the death of the process.

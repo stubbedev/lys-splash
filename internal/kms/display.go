@@ -21,6 +21,11 @@ import (
 // simpledrm, efidrm, vesadrm and ofdrm.
 var firmwareDrivers = []string{"simple-framebuffer", "efi-framebuffer", "vesa-framebuffer", "of-display"}
 
+// driversRemovedWithClients are the drivers whose PCI shutdown removes the DRM
+// device and frees its state, so a client that closes its card afterwards
+// oopses the kernel and the machine never reaches the reset.
+var driversRemovedWithClients = []string{"nvidia"}
+
 // A card another process is master of is tried again this often for this
 // long: a display manager's service can stop before the compositor in its
 // session lets the card go.
@@ -105,15 +110,46 @@ func open(paths Paths, opener func(string) (device, error), uevents bool, log *s
 	return d, nil
 }
 
+func (p Paths) driver(name string) (string, error) {
+	link, err := os.Readlink(filepath.Join(p.Sysfs, name, "device", "driver"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("kms: the driver of %s: %w", name, err)
+	}
+	return filepath.Base(link), nil
+}
+
 func (d *Display) firmware(name string) (bool, error) {
-	link, err := os.Readlink(filepath.Join(d.paths.Sysfs, name, "device", "driver"))
+	driver, err := d.paths.driver(name)
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(firmwareDrivers, driver), nil
+}
+
+func (p Paths) ClientsMustCloseBeforeRemoval() (bool, error) {
+	entries, err := os.ReadDir(p.Sysfs)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("kms: the driver of %s: %w", name, err)
+		return false, fmt.Errorf("kms: list %s: %w", p.Sysfs, err)
 	}
-	return slices.Contains(firmwareDrivers, filepath.Base(link)), nil
+	for _, e := range entries {
+		if !isCard(e.Name()) {
+			continue
+		}
+		driver, err := p.driver(e.Name())
+		if err != nil {
+			return false, err
+		}
+		if slices.Contains(driversRemovedWithClients, driver) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (d *Display) add(name string) {
