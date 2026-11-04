@@ -109,6 +109,19 @@ func ParseUevent(msg []byte) (Uevent, error) {
 	return u, nil
 }
 
+var subsystemDRM = []byte("SUBSYSTEM=drm")
+
+// aboutDRM says whether a raw uevent message names the drm subsystem, without
+// the allocations of parsing it.
+func aboutDRM(msg []byte) bool {
+	for field := range bytes.SplitSeq(msg, []byte{0}) {
+		if bytes.Equal(field, subsystemDRM) {
+			return true
+		}
+	}
+	return false
+}
+
 const kernelGroup = 1
 
 // ueventSocket is a NETLINK_KOBJECT_UEVENT socket subscribed to the kernel's

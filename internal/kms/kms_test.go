@@ -163,6 +163,55 @@ func TestParseUevent(t *testing.T) {
 	}
 }
 
+func TestUeventReaderPostsOnlyDRMMessages(t *testing.T) {
+	t.Parallel()
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disp, _ := fakeDisplay(t, map[string]*fakeDevice{}, nil)
+	disp.uevents = &ueventSocket{f: os.NewFile(uintptr(fds[0]), "uevent"), buf: make([]byte, 1<<16)}
+	disp.wg.Go(disp.readUevents)
+	sender := os.NewFile(uintptr(fds[1]), "sender")
+	defer sender.Close()
+	foreign := []string{
+		"change@/devices/usb1\x00ACTION=change\x00SUBSYSTEM=usb\x00",
+		"add@/devices/block/sda\x00SUBSYSTEM=block\x00DEVNAME=sda\x00",
+		"add@/devices/fake\x00SUBSYSTEM=drm_dp_aux_dev\x00",
+		"not a uevent at all",
+	}
+	const noise = 100
+	for i := range noise {
+		if _, err := sender.WriteString(foreign[i%len(foreign)]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := "change@/x/card0\x00SUBSYSTEM=drm\x00HOTPLUG=1\x00DEVNAME=dri/card0\x00"
+	if _, err := sender.WriteString(want); err != nil {
+		t.Fatal(err)
+	}
+	if e := nextEvent(t, disp); string(e.uevent) != want {
+		t.Errorf("the first event posted after %d foreign messages is %+v", noise, e)
+	}
+	if n := len(disp.Events()); n != 0 {
+		t.Errorf("%d more events posted", n)
+	}
+	if err := disp.Close(false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAboutDRMDoesNotAllocate(t *testing.T) {
+	msg := []byte("change@/devices/usb1\x00ACTION=change\x00SUBSYSTEM=usb\x00DEVTYPE=usb_device\x00")
+	if n := testing.AllocsPerRun(100, func() {
+		if aboutDRM(msg) {
+			t.Fatal("a usb uevent is about drm")
+		}
+	}); n != 0 {
+		t.Errorf("%v allocations filtering a foreign uevent", n)
+	}
+}
+
 func TestIsCard(t *testing.T) {
 	t.Parallel()
 	for name, want := range map[string]bool{"card0": true, "card12": true, "card": false, "card0-eDP-1": false, "renderD128": false, "cardx": false} {

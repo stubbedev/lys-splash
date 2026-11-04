@@ -258,6 +258,9 @@ func (d *Display) readUevents() {
 			d.send(Event{err: err})
 			return
 		}
+		if !aboutDRM(msg) {
+			continue
+		}
 		if !d.send(Event{uevent: slices.Clone(msg)}) {
 			return
 		}
