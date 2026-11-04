@@ -42,6 +42,7 @@ type fakeDevice struct {
 	nextID     uint32
 	commits    []commit
 	refuse     func(flags uint32) error
+	forget     bool
 	removed    []uint32
 	closedFBs  []uint32
 	destroyed  int
@@ -251,6 +252,9 @@ func (d *fakeDevice) CloseFB(id uint32) error {
 }
 
 func (d *fakeDevice) Commit(r *drm.Request, flags uint32, user uint64) error {
+	if d.forget {
+		return nil
+	}
 	if d.refuse != nil {
 		if err := d.refuse(flags); err != nil {
 			return err

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -985,5 +986,68 @@ func TestClientsMustCloseBeforeRemovalWithoutSysfs(t *testing.T) {
 	got, err := Paths{Sysfs: filepath.Join(t.TempDir(), "absent")}.ClientsMustCloseBeforeRemoval()
 	if err != nil || got {
 		t.Errorf("ClientsMustCloseBeforeRemoval = %v, %v, want false, nil", got, err)
+	}
+}
+
+func TestAFlipAllocatesNothing(t *testing.T) {
+	d := newFakeDevice("/dev/dri/card0", 1)
+	d.connect(40, [2]uint32{531, 299}, mode(1920, 1080, true))
+	c := openFake(t, d, false, &Scaler{})
+	o := c.Outputs()[0]
+	d.forget = true
+	if err := o.Present(image.Rectangle{Max: o.Frame().Size}); err != nil {
+		t.Fatal(err)
+	}
+	throbber := image.Rect(100, 100, 140, 140)
+	flip := drm.FlipEvent{UserData: 10}
+	if err := c.Flipped(flip); err != nil {
+		t.Fatal(err)
+	}
+	if n := testing.AllocsPerRun(100, func() {
+		if err := o.Present(throbber); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Flipped(flip); err != nil {
+			t.Fatal(err)
+		}
+	}); n != 0 {
+		t.Errorf("%v allocations per flip", n)
+	}
+}
+
+func TestAMissingAtomicPropertyFailsTheCard(t *testing.T) {
+	t.Parallel()
+	d := newFakeDevice("/dev/dri/card0", 1)
+	delete(d.objects[20], "SRC_W")
+	if _, err := openCard(d, "card0", false, &Scaler{}, quiet); err == nil || !strings.Contains(err.Error(), "SRC_W") {
+		t.Errorf("opening a plane without SRC_W: %v", err)
+	}
+}
+
+func BenchmarkFlip(b *testing.B) {
+	d := newFakeDevice("/dev/dri/card0", 1)
+	d.connect(40, [2]uint32{531, 299}, mode(1920, 1080, true))
+	c, err := openCard(d, "card0", false, &Scaler{}, quiet)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := c.Rescan(); err != nil {
+		b.Fatal(err)
+	}
+	o := c.Outputs()[0]
+	d.forget = true
+	if err := o.Present(image.Rectangle{Max: o.Frame().Size}); err != nil {
+		b.Fatal(err)
+	}
+	throbber := image.Rect(100, 100, 140, 140)
+	flip := drm.FlipEvent{UserData: 10}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := c.Flipped(flip); err != nil {
+			b.Fatal(err)
+		}
+		if err := o.Present(throbber); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

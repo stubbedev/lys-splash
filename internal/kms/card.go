@@ -11,6 +11,7 @@ import (
 	"image"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/stubbedev/lys-lib/drm"
 	"github.com/stubbedev/lys-lib/fourcc"
@@ -45,27 +46,74 @@ type device interface {
 	Commit(r *drm.Request, flags uint32, userData uint64) error
 }
 
-type object struct {
-	id    uint32
-	props map[string]drm.Property
+// propIDs looks an object's property IDs up once, so that a commit touches no
+// map and a property the atomic API promises fails when the card opens.
+type propIDs struct {
+	object  string
+	props   map[string]drm.Property
+	missing []string
 }
 
-func (o object) set(r *drm.Request, name string, value uint64) {
-	if p, ok := o.props[name]; ok {
-		r.Add(o.id, p.ID, value)
+func (p *propIDs) id(name string) uint32 {
+	prop, ok := p.props[name]
+	if !ok {
+		p.missing = append(p.missing, name)
 	}
+	return prop.ID
+}
+
+func (p *propIDs) err() error {
+	if len(p.missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("kms: %s has no %s property", p.object, strings.Join(p.missing, ", "))
+}
+
+type connector struct {
+	id   uint32
+	crtc uint32
+}
+
+func newConnector(id uint32, props map[string]drm.Property) (connector, error) {
+	p := propIDs{object: fmt.Sprintf("connector %d", id), props: props}
+	c := connector{id: id, crtc: p.id("CRTC_ID")}
+	return c, p.err()
 }
 
 type crtc struct {
-	object
-	index int
-	taken bool
+	id     uint32
+	mode   uint32
+	active uint32
+	index  int
+	taken  bool
+}
+
+func newCRTC(id uint32, index int, props map[string]drm.Property) (*crtc, error) {
+	p := propIDs{object: fmt.Sprintf("CRTC %d", id), props: props}
+	c := &crtc{id: id, mode: p.id("MODE_ID"), active: p.id("ACTIVE"), index: index}
+	return c, p.err()
 }
 
 type plane struct {
-	object
-	possible uint32
-	taken    bool
+	id                         uint32
+	fb, crtc                   uint32
+	srcX, srcY, srcW, srcH     uint32
+	crtcX, crtcY, crtcW, crtcH uint32
+	damageClips                uint32
+	possible                   uint32
+	taken                      bool
+}
+
+func newPlane(id, possible uint32, props map[string]drm.Property) (*plane, error) {
+	p := propIDs{object: fmt.Sprintf("plane %d", id), props: props}
+	pl := &plane{
+		id: id, possible: possible,
+		fb: p.id("FB_ID"), crtc: p.id("CRTC_ID"),
+		srcX: p.id("SRC_X"), srcY: p.id("SRC_Y"), srcW: p.id("SRC_W"), srcH: p.id("SRC_H"),
+		crtcX: p.id("CRTC_X"), crtcY: p.id("CRTC_Y"), crtcW: p.id("CRTC_W"), crtcH: p.id("CRTC_H"),
+		damageClips: props["FB_DAMAGE_CLIPS"].ID,
+	}
+	return pl, p.err()
 }
 
 // Card is one open DRM card and the outputs lit on it.
@@ -101,7 +149,11 @@ func openCard(dev device, name string, firmware bool, scaler *Scaler, log *slog.
 		if err != nil {
 			return nil, err
 		}
-		c.crtcs = append(c.crtcs, &crtc{object: object{id, props}, index: i})
+		cr, err := newCRTC(id, i, props)
+		if err != nil {
+			return nil, err
+		}
+		c.crtcs = append(c.crtcs, cr)
 	}
 	planes, err := dev.Planes()
 	if err != nil {
@@ -142,7 +194,7 @@ func (c *Card) primary(id uint32) (*plane, error) {
 	if primary, ok := enum.Enums["Primary"]; !ok || kind.Value != primary {
 		return nil, nil
 	}
-	return &plane{object: object{id, props}, possible: info.PossibleCRTCs}, nil
+	return newPlane(id, info.PossibleCRTCs, props)
 }
 
 // Name is the card node's name, such as "card0".
@@ -283,6 +335,10 @@ func (c *Card) add(conn drm.Connector) error {
 	if err != nil {
 		return err
 	}
+	connected, err := newConnector(conn.ID, props)
+	if err != nil {
+		return err
+	}
 	routed, err := intconv.Exact[uint32](props["CRTC_ID"].Value)
 	if err != nil {
 		return fmt.Errorf("CRTC_ID: %w", err)
@@ -311,7 +367,7 @@ func (c *Card) add(conn drm.Connector) error {
 	o := &Output{
 		card:      c,
 		name:      conn.Name(),
-		connector: object{conn.ID, props},
+		connector: connected,
 		crtc:      cr,
 		plane:     pl,
 		mode:      mode,
@@ -394,7 +450,7 @@ func (c *Card) Release(retain bool) error {
 type Output struct {
 	card      *Card
 	name      string
-	connector object
+	connector connector
 	crtc      *crtc
 	plane     *plane
 	mode      drm.Mode
@@ -556,7 +612,7 @@ func (o *Output) flip() error {
 // one again when the damage is where it was: an animation damages the same
 // rectangle frame after frame.
 func (o *Output) damageClips() (uint32, error) {
-	if _, ok := o.plane.props["FB_DAMAGE_CLIPS"]; !ok || o.damage.Empty() || o.modeset {
+	if o.plane.damageClips == 0 || o.damage.Empty() || o.modeset {
 		return 0, nil
 	}
 	r := o.rotation.Device(o.frame.Size, o.damage)
@@ -584,23 +640,24 @@ func (o *Output) request(fb, clips uint32) {
 	r := &o.card.req
 	r.Reset()
 	if o.modeset {
-		o.connector.set(r, "CRTC_ID", uint64(o.crtc.id))
-		o.crtc.set(r, "MODE_ID", uint64(o.modeBlob))
-		o.crtc.set(r, "ACTIVE", 1)
+		r.Add(o.connector.id, o.connector.crtc, uint64(o.crtc.id))
+		r.Add(o.crtc.id, o.crtc.mode, uint64(o.modeBlob))
+		r.Add(o.crtc.id, o.crtc.active, 1)
 	}
 	size := modeSize(o.mode)
 	w, h := uint64(size.X), uint64(size.Y) //nolint:gosec // mode sizes are 16-bit
-	o.plane.set(r, "FB_ID", uint64(fb))
-	o.plane.set(r, "CRTC_ID", uint64(o.crtc.id))
-	o.plane.set(r, "SRC_X", 0)
-	o.plane.set(r, "SRC_Y", 0)
-	o.plane.set(r, "SRC_W", w<<16)
-	o.plane.set(r, "SRC_H", h<<16)
-	o.plane.set(r, "CRTC_X", 0)
-	o.plane.set(r, "CRTC_Y", 0)
-	o.plane.set(r, "CRTC_W", w)
-	o.plane.set(r, "CRTC_H", h)
+	p := o.plane
+	r.Add(p.id, p.fb, uint64(fb))
+	r.Add(p.id, p.crtc, uint64(o.crtc.id))
+	r.Add(p.id, p.srcX, 0)
+	r.Add(p.id, p.srcY, 0)
+	r.Add(p.id, p.srcW, w<<16)
+	r.Add(p.id, p.srcH, h<<16)
+	r.Add(p.id, p.crtcX, 0)
+	r.Add(p.id, p.crtcY, 0)
+	r.Add(p.id, p.crtcW, w)
+	r.Add(p.id, p.crtcH, h)
 	if clips != 0 {
-		o.plane.set(r, "FB_DAMAGE_CLIPS", uint64(clips))
+		r.Add(p.id, p.damageClips, uint64(clips))
 	}
 }
