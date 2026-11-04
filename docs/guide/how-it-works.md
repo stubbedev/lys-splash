@@ -57,6 +57,12 @@ kernel command line](/guide/install#the-kernel-command-line).
 Every connected output of every DRM card is lit on two linear XRGB8888 dumb
 buffers, flipped with atomic commits, one per vblank, copying only what changed.
 
+- **Frame loop.** One goroutine draws and flips, and it never waits for anything
+  else. A worker per card opens it, probes its connectors and allocates buffers;
+  each connection has a writer behind a bounded queue, dropped if its client
+  stops reading; the theme and the boot duration are read on a goroutine of their
+  own. The loop wakes only when the picture changes, and damage is the separate
+  rectangles that did, reported to the kernel with `FB_DAMAGE_CLIPS`.
 - **Mode.** An output keeps the mode it already shows, so the first frame needs
   no modeset. Otherwise it takes the sink's preferred mode, or else its first.
 - **Firmware framebuffers.** The splash draws on simpledrm, efidrm, vesadrm and
