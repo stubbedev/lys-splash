@@ -669,7 +669,7 @@ func switchDrivers(t *testing.T, simple, native *fakeDevice, firmwareScale int) 
 		t.Fatalf("outputs on simpledrm: %v, want one at scale %d", outs, firmwareScale)
 	}
 	remove := "remove@/devices/platform/simple-framebuffer.0/drm/card0\x00ACTION=remove\x00SUBSYSTEM=drm\x00DEVNAME=dri/card0\x00"
-	if err := disp.Handle(Event{uevent: []byte(remove)}); err != nil {
+	if _, err := disp.Handle(Event{uevent: []byte(remove)}); err != nil {
 		t.Fatal(err)
 	}
 	if len(disp.Outputs()) != 0 || !simple.closed {
@@ -680,7 +680,7 @@ func switchDrivers(t *testing.T, simple, native *fakeDevice, firmwareScale int) 
 		t.Fatal(err)
 	}
 	add := "add@/devices/pci0000:00/0000:00:02.0/drm/card1\x00ACTION=add\x00SUBSYSTEM=drm\x00DEVNAME=dri/card1\x00"
-	if err := disp.Handle(Event{uevent: []byte(add)}); err != nil {
+	if _, err := disp.Handle(Event{uevent: []byte(add)}); err != nil {
 		t.Fatal(err)
 	}
 	return disp
@@ -698,7 +698,7 @@ func TestDisplayFollowsTheDriverSwitch(t *testing.T) {
 	if len(outs) != 1 || outs[0].card.firmware || outs[0].Scale() != 2 {
 		t.Fatalf("outputs on the native driver: %v, want one at simpledrm's scale 2", outs)
 	}
-	if err := disp.Handle(Event{card: outs[0].card, flip: drm.FlipEvent{UserData: 10}}); err != nil {
+	if _, err := disp.Handle(Event{card: outs[0].card, flip: drm.FlipEvent{UserData: 10}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := disp.Close(true); err != nil {
@@ -756,7 +756,7 @@ func TestDisplayDeactivatesNewCards(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(paths.Dev, "card1"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := disp.Handle(Event{uevent: []byte("add@/x/card1\x00SUBSYSTEM=drm\x00DEVNAME=dri/card1\x00")}); err != nil {
+	if _, err := disp.Handle(Event{uevent: []byte("add@/x/card1\x00SUBSYSTEM=drm\x00DEVNAME=dri/card1\x00")}); err != nil {
 		t.Fatal(err)
 	}
 	if a.master || b.master {
@@ -844,7 +844,7 @@ func TestDisplayLightsACardOnceItsMasterLetsGo(t *testing.T) {
 	if len(disp.Outputs()) != 0 {
 		t.Fatal("a busy card has outputs")
 	}
-	if err := disp.Handle(nextEvent(t, disp)); err != nil {
+	if _, err := disp.Handle(nextEvent(t, disp)); err != nil {
 		t.Fatal(err)
 	}
 	if len(disp.Outputs()) != 0 {
@@ -852,7 +852,7 @@ func TestDisplayLightsACardOnceItsMasterLetsGo(t *testing.T) {
 	}
 	e := nextEvent(t, disp)
 	d.masterErr = nil
-	if err := disp.Handle(e); err != nil {
+	if _, err := disp.Handle(e); err != nil {
 		t.Fatal(err)
 	}
 	if !d.master || len(disp.Outputs()) != 1 {
@@ -867,7 +867,7 @@ func TestDisplayGivesUpOnACardThatStaysBusy(t *testing.T) {
 	disp, _ := fakeDisplay(t, devs, nil)
 	e := nextEvent(t, disp)
 	e.until = time.Now().Add(-time.Second)
-	if err := disp.Handle(e); err != nil {
+	if _, err := disp.Handle(e); err != nil {
 		t.Fatal(err)
 	}
 	if len(disp.Outputs()) != 0 {
@@ -883,7 +883,7 @@ func TestDisplayStopsTryingABusyCardWhileDeactivated(t *testing.T) {
 	if err := disp.Deactivate(); err != nil {
 		t.Fatal(err)
 	}
-	if err := disp.Handle(nextEvent(t, disp)); err != nil {
+	if _, err := disp.Handle(nextEvent(t, disp)); err != nil {
 		t.Fatal(err)
 	}
 	assertNoEvent(t, disp)

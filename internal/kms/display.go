@@ -69,6 +69,7 @@ type Display struct {
 	wg      sync.WaitGroup
 	uevents *ueventSocket
 	paused  bool
+	outs    []*Output
 }
 
 // Open opens every card under paths and lights its outputs, then follows
@@ -272,25 +273,31 @@ func (d *Display) Events() <-chan Event {
 	return d.events
 }
 
-// Handle applies e: a flip lets its output show the next frame, a card that
-// appears is opened and lit, one that disappears is dropped, a hotplug
-// rescans its card's connectors and a busy card is tried again.
-func (d *Display) Handle(e Event) error {
+// Handle applies e and says whether Outputs changed: a flip lets its output
+// show the next frame, a card that appears is opened and lit, one that
+// disappears is dropped, a hotplug rescans its card's connectors and a busy
+// card is tried again.
+func (d *Display) Handle(e Event) (bool, error) {
 	switch {
 	case e.err != nil:
-		return e.err
+		return false, e.err
 	case e.uevent != nil:
-		return d.uevent(e.uevent)
+		before := d.Outputs()
+		err := d.uevent(e.uevent)
+		d.outs = nil
+		return !slices.Equal(before, d.Outputs()), err
 	case e.busy != "":
+		before := d.Outputs()
 		d.light(e.busy, e.until)
-		return nil
+		d.outs = nil
+		return !slices.Equal(before, d.Outputs()), nil
 	case e.card != nil:
 		if d.cards[e.card.name] != e.card {
-			return nil
+			return false, nil
 		}
-		return e.card.Flipped(e.flip)
+		return false, e.card.Flipped(e.flip)
 	}
-	return nil
+	return false, nil
 }
 
 func (d *Display) uevent(msg []byte) error {
@@ -334,13 +341,17 @@ func (d *Display) closeCard(c *Card, retain bool) error {
 	return errors.Join(r.Close(), c.Release(retain), c.dev.Close())
 }
 
-// Outputs are every lit output, ordered by card and connector.
+// Outputs are every lit output, ordered by card and connector. The list is
+// built once per change, and a change gives a new list.
 func (d *Display) Outputs() []*Output {
-	var out []*Output
-	for _, c := range d.sortedCards() {
-		out = append(out, c.Outputs()...)
+	if d.outs != nil {
+		return d.outs
 	}
-	return out
+	d.outs = []*Output{}
+	for _, c := range d.sortedCards() {
+		d.outs = append(d.outs, c.outputs...)
+	}
+	return d.outs
 }
 
 func (d *Display) sortedCards() []*Card {
@@ -370,6 +381,7 @@ func (d *Display) Reactivate() error {
 	for _, c := range d.sortedCards() {
 		errs = append(errs, c.Reactivate(), c.Rescan())
 	}
+	d.outs = nil
 	return errors.Join(errs...)
 }
 
@@ -385,6 +397,7 @@ func (d *Display) Close(retain bool) error {
 		errs = append(errs, d.closeCard(c, retain))
 	}
 	clear(d.cards)
+	d.outs = nil
 	d.wg.Wait()
 	return errors.Join(errs...)
 }

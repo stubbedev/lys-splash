@@ -310,5 +310,5 @@ func serve(o options, log *slog.Logger) (err error) {
 		LoadTheme:        theme.Load,
 		Log:              log,
 	}
-	return daemon.Run(ctx, cfg, t, bgrt, daemon.Devices{Display: daemon.KMS{Display: display}, VT: vt, Console: capture})
+	return daemon.Run(ctx, cfg, t, bgrt, daemon.Devices{Display: &daemon.KMS{Display: display}, VT: vt, Console: capture})
 }

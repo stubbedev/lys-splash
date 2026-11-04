@@ -40,7 +40,8 @@ type Screen interface {
 // the VT.
 type Display interface {
 	Events() <-chan kms.Event
-	Handle(e kms.Event) error
+	// Handle applies e and says whether the set of screens changed.
+	Handle(e kms.Event) (bool, error)
 	Screens() []Screen
 	Deactivate() error
 	Reactivate() error
@@ -79,15 +80,24 @@ type Devices struct {
 }
 
 // KMS adapts a kms.Display to Display.
-type KMS struct{ *kms.Display }
+type KMS struct {
+	*kms.Display
+	outputs []*kms.Output
+	screens []Screen
+}
 
-// Screens are the display's lit outputs.
-func (k KMS) Screens() []Screen {
+// Screens are the display's lit outputs; the list is built again only when
+// they change, and a change gives a new list rather than altering this one.
+func (k *KMS) Screens() []Screen {
 	outs := k.Outputs()
+	if slices.Equal(outs, k.outputs) {
+		return k.screens
+	}
 	s := make([]Screen, len(outs))
 	for i, o := range outs {
 		s[i] = o
 	}
+	k.outputs, k.screens = outs, s
 	return s
 }
 
@@ -161,8 +171,12 @@ type daemon struct {
 	renderer *theme.Renderer
 	units    bool
 	state    theme.State
-	drawn    map[Screen]*theme.State
+	screens  []Screen
+	drawn    map[Screen]theme.State
+	settled  theme.State
+	stale    bool
 	shown    *theme.State
+	inText   theme.State
 	graphics bool
 	paused   bool
 	inactive bool
@@ -197,7 +211,7 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, dev D
 		bgrt:     bgrt,
 		renderer: r,
 		units:    t.Units,
-		drawn:    map[Screen]*theme.State{},
+		drawn:    map[Screen]theme.State{},
 		inbox:    make(chan event, 16),
 		done:     make(chan struct{}),
 		state:    theme.State{Updating: cfg.Mode == Updates},
@@ -287,16 +301,20 @@ func (d *daemon) loop(ctx context.Context) error {
 			default:
 				err = d.typed(e.keys)
 			}
+			d.state.Prompt = d.asker.Prompt()
 		case e := <-d.display.Events():
-			err = d.display.Handle(e)
+			var changed bool
+			changed, err = d.display.Handle(e)
+			d.stale = d.stale || changed
 		case <-tick:
 			d.state.Phase = (d.state.Phase + 1) % theme.Frames
 			if d.previous > 0 {
 				d.state.Progress = bootProgress(time.Since(d.started), d.previous)
 			}
 		}
-		d.state.Prompt = d.asker.Prompt()
-		err = errors.Join(err, d.redraw())
+		if d.stale || d.state != d.settled {
+			err = errors.Join(err, d.redraw())
+		}
 		if reply != nil {
 			err = errors.Join(err, reply())
 		}
@@ -380,18 +398,22 @@ func (d *daemon) typed(keys []key.Key) error {
 	}
 	var errs []error
 	for _, k := range keys {
+		var err error
 		if k.Kind == key.Escape {
-			errs = append(errs, d.toggleDetails())
-			continue
+			err = d.toggleDetails()
+		} else {
+			err = d.asker.Key(k)
 		}
-		errs = append(errs, d.asker.Key(k))
+		if err != nil {
+			errs = append(errs, err)
+		}
 	}
 	return errors.Join(errs...)
 }
 
 func (d *daemon) toggleDetails() error {
 	d.details = !d.details
-	d.shown = nil
+	d.shown, d.stale = nil, true
 	if len(d.display.Screens()) == 0 {
 		if d.details {
 			return nil
@@ -489,12 +511,12 @@ func (d *daemon) apply(req protocol.Request) error {
 	case protocol.Deactivate:
 		d.inactive = true
 		if d.details {
-			d.details = false
+			d.details, d.stale = false, true
 			return nil
 		}
 		return d.display.Deactivate()
 	case protocol.Reactivate:
-		d.inactive, d.details = false, false
+		d.inactive, d.details, d.stale = false, false, true
 		clear(d.drawn)
 		return errors.Join(d.display.Reactivate(), d.reclaim())
 	case protocol.IgnoreKeystroke:
@@ -551,7 +573,7 @@ func (d *daemon) themeLoaded(l *themeLoad) (func() error, error) {
 	if l.renderer != nil {
 		d.renderer, d.units = l.renderer, l.units
 		clear(d.drawn)
-		d.shown = nil
+		d.shown, d.stale = nil, true
 	}
 	return func() error {
 		var errs []error
@@ -562,35 +584,54 @@ func (d *daemon) themeLoaded(l *themeLoad) (func() error, error) {
 	}, l.err
 }
 
+// redraw brings every screen to the state. A screen that fails to draw stays
+// at the state it shows, so the next redraw takes it the whole way.
 func (d *daemon) redraw() error {
 	screens := d.display.Screens()
 	if len(screens) == 0 || d.details {
+		d.stale, d.settled = false, d.state
 		return d.redrawText()
 	}
 	var errs []error
 	if d.vt != nil && !d.graphics {
-		errs = append(errs, d.vt.Graphics())
+		if err := d.vt.Graphics(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	d.graphics, d.shown = true, nil
-	for s := range d.drawn {
-		if !slices.Contains(screens, s) {
-			delete(d.drawn, s)
+	if !slices.Equal(screens, d.screens) {
+		d.screens = screens
+		for s := range d.drawn {
+			if !slices.Contains(screens, s) {
+				delete(d.drawn, s)
+			}
 		}
 	}
+	d.stale, d.settled = false, d.state
 	for _, s := range screens {
-		prev := d.drawn[s]
-		damage, err := d.renderer.Draw(s.Frame(), s.Scale(), prev, d.state)
-		if err != nil {
+		if err := d.drawScreen(s); err != nil {
 			errs = append(errs, err)
-			continue
-		}
-		state := d.state
-		d.drawn[s] = &state
-		if prev == nil || !damage.Empty() {
-			errs = append(errs, s.Present(damage))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (d *daemon) drawScreen(s Screen) error {
+	prev, known := d.drawn[s]
+	from := &prev
+	if !known {
+		from = nil
+	}
+	damage, err := d.renderer.Draw(s.Frame(), s.Scale(), from, d.state)
+	if err != nil {
+		d.stale = true
+		return err
+	}
+	d.drawn[s] = d.state
+	if known && damage.Empty() {
+		return nil
+	}
+	return s.Present(damage)
 }
 
 func (d *daemon) redrawText() error {
@@ -599,16 +640,22 @@ func (d *daemon) redrawText() error {
 	}
 	var errs []error
 	if d.graphics {
-		errs = append(errs, d.vt.Text())
+		if err := d.vt.Text(); err != nil {
+			errs = append(errs, err)
+		}
 		d.graphics, d.shown = false, nil
 	}
 	clear(d.drawn)
 	if d.details && d.shown == nil {
-		errs = append(errs, d.showMessages())
+		if err := d.showMessages(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	errs = append(errs, console.TextView{W: d.vt}.Show(d.shown, d.state))
-	state := d.state
-	d.shown = &state
+	if err := (console.TextView{W: d.vt}).Show(d.shown, d.state); err != nil {
+		errs = append(errs, err)
+	}
+	d.inText = d.state
+	d.shown = &d.inText
 	return errors.Join(errs...)
 }
 

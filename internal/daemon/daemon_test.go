@@ -56,8 +56,8 @@ type fakeDisplay struct {
 	onDeactive  func()
 }
 
-func (d *fakeDisplay) Events() <-chan kms.Event { return nil }
-func (d *fakeDisplay) Handle(kms.Event) error   { return nil }
+func (d *fakeDisplay) Events() <-chan kms.Event       { return nil }
+func (d *fakeDisplay) Handle(kms.Event) (bool, error) { return false, nil }
 
 func (d *fakeDisplay) Screens() []Screen {
 	d.mu.Lock()

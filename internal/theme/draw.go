@@ -59,6 +59,7 @@ type Renderer struct {
 	bgrt  *BGRT
 	logos map[int]*render.Icon
 	steps map[throbberStep][]byte
+	cv    render.Canvas
 }
 
 type throbberStep struct {
@@ -145,7 +146,7 @@ func (r *Renderer) Draw(f kms.Frame, scale int, prev *State, cur State) (image.R
 	if scale < 1 {
 		return image.Rectangle{}, fmt.Errorf("theme: scale %d is not positive", scale)
 	}
-	cv := render.New(f.Pix, f.Stride, f.Size.X, f.Size.Y)
+	cv := r.cv.Reset(f.Pix, f.Stride, f.Size.X, f.Size.Y, 1, 1)
 	l := r.layout(f.Size, scale)
 	full := image.Rectangle{Max: f.Size}
 	if prev == nil || prev.Hidden != cur.Hidden {
