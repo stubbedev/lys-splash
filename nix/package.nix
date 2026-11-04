@@ -29,7 +29,7 @@
 
       inherit src;
 
-      vendorHash = "sha256-ORbqRjm1ko7D/pAN1OfXJBcPI33C1GShrCXvcDcZtNs=";
+      vendorHash = "sha256-/Bw7QVrLzW7DktUrmZaY8lHL35C1BZTItW9p6L5d460=";
 
       env.CGO_ENABLED = 0;
 
