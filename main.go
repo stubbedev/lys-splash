@@ -305,7 +305,9 @@ func serve(o options, log *slog.Logger) (err error) {
 		Notify:           notify,
 		Chroot:           daemon.SwitchRoot,
 		BootDuration:     daemon.BootDurationFile,
+		LoadBootDuration: daemon.LoadBootDuration,
 		SaveBootDuration: daemon.SaveBootDuration,
+		LoadTheme:        theme.Load,
 		Log:              log,
 	}
 	return daemon.Run(ctx, cfg, t, bgrt, daemon.Devices{Display: daemon.KMS{Display: display}, VT: vt, Console: capture})

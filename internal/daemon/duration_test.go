@@ -224,20 +224,45 @@ func TestBootReadsThePreviousDurationAfterTheNewRoot(t *testing.T) {
 			root := t.TempDir()
 			path := filepath.Join(root, "boot-duration")
 			var logs lockedBuffer
-			r := start(t, setup{screens: 1, duration: path, log: slog.New(slog.NewTextHandler(&logs, nil)), chroot: func(string) error {
+			logged := func() (int, int) {
+				out := logs.String()
+				return strings.Count(out, missing), strings.Count(out, corrupt)
+			}
+			awaitLogged := func(wantMissing, wantCorrupt int) {
+				t.Helper()
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					m, c := logged()
+					if m == wantMissing && c == wantCorrupt {
+						return
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("want the file missing %d times and corrupt %d times, logged:\n%s", wantMissing, wantCorrupt, logs.String())
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+			loaded := make(chan struct{}, 2)
+			r := start(t, setup{screens: 1, duration: path, log: slog.New(slog.NewTextHandler(&logs, nil)), loadBoot: func(p string) (time.Duration, error) {
+				defer func() { loaded <- struct{}{} }()
+				return LoadBootDuration(p)
+			}, chroot: func(string) error {
 				if tc.previous == "" {
 					return nil
 				}
 				return os.WriteFile(path, []byte(tc.previous), 0o600)
 			}})
+			<-loaded
+			awaitLogged(1, 0)
 			r.call(t, protocol.NewRoot{Dir: root}, protocol.Ack{})
+			<-loaded
+			awaitLogged(tc.missing, tc.corrupt)
 			r.call(t, protocol.Quit{}, protocol.Ack{})
 			if err := r.finished(t); err != nil {
 				t.Fatal(err)
 			}
-			out := logs.String()
-			if strings.Count(out, missing) != tc.missing || strings.Count(out, corrupt) != tc.corrupt {
-				t.Errorf("want the file missing %d times and corrupt %d times, logged:\n%s", tc.missing, tc.corrupt, out)
+			if m, c := logged(); m != tc.missing || c != tc.corrupt {
+				t.Errorf("want the file missing %d times and corrupt %d times, logged:\n%s", tc.missing, tc.corrupt, logs.String())
 			}
 		})
 	}
@@ -253,7 +278,8 @@ func TestBootShowsProgressOnlyWithAPreviousBoot(t *testing.T) {
 	quiet := slog.New(slog.DiscardHandler)
 	for path, want := range map[string]bool{recorded: true, filepath.Join(dir, "missing"): false} {
 		d := &daemon{cfg: Config{BootDuration: path, Log: quiet}}
-		d.loadPrevious()
+		total, err := LoadBootDuration(path)
+		d.previousLoaded(&previousBoot{total: total, err: err})
 		if d.state.Booting != want || d.previous > 0 != want {
 			t.Errorf("%s: Booting = %v with previous %v, want %v", path, d.state.Booting, d.previous, want)
 		}

@@ -120,15 +120,34 @@ type Config struct {
 	// from, for its progress, and records its own in if it came through the
 	// switch to a real root that became writable: BootDurationFile.
 	BootDuration     string
+	LoadBootDuration func(path string) (time.Duration, error)
 	SaveBootDuration func(path string, d time.Duration) error
-	Log              *slog.Logger
+	// LoadTheme reads the theme Reload shows.
+	LoadTheme func(path string) (theme.Theme, error)
+	Log       *slog.Logger
+}
+
+// previousBoot is what reading the previous boot's duration found.
+type previousBoot struct {
+	total time.Duration
+	err   error
+}
+
+// themeLoad is what reading the theme found, for the Reload calls waiting on it.
+type themeLoad struct {
+	calls    []*server.Call
+	renderer *theme.Renderer
+	units    bool
+	err      error
 }
 
 type event struct {
-	call   *server.Call
-	hangup *server.Conn
-	keys   []key.Key
-	output []byte
+	call     *server.Call
+	hangup   *server.Conn
+	keys     []key.Key
+	output   []byte
+	previous *previousBoot
+	theme    *themeLoad
 }
 
 type daemon struct {
@@ -155,6 +174,9 @@ type daemon struct {
 	previous time.Duration
 	switched bool
 	writable bool
+	// reloads wait for the next theme load, reloading says one is running.
+	reloads   []*server.Call
+	reloading bool
 }
 
 // Run serves the splash until a quit request or ctx ends. ctx ending is a
@@ -211,15 +233,26 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, dev D
 	return d.loop(ctx)
 }
 
+// loadPrevious reads the previous boot's duration off the loop, since the
+// disk may stall; previousLoaded applies it.
 func (d *daemon) loadPrevious() {
-	total, err := LoadBootDuration(d.cfg.BootDuration)
-	switch {
+	go func() {
+		total, err := d.cfg.LoadBootDuration(d.cfg.BootDuration)
+		d.post(event{previous: &previousBoot{total: total, err: err}})
+	}()
+}
+
+func (d *daemon) previousLoaded(p *previousBoot) {
+	if d.previous > 0 {
+		return
+	}
+	switch err := p.err; {
 	case errors.Is(err, fs.ErrNotExist):
 		d.cfg.Log.Info("no previous boot to measure progress by", "file", d.cfg.BootDuration)
 	case err != nil:
 		d.cfg.Log.Warn("showing no boot progress", "err", err)
 	default:
-		d.previous, d.state.Booting = total, true
+		d.previous, d.state.Booting = p.total, true
 	}
 }
 
@@ -247,6 +280,10 @@ func (d *daemon) loop(ctx context.Context) error {
 				d.asker.HangUp(e.hangup)
 			case e.output != nil:
 				err = d.output(e.output)
+			case e.previous != nil:
+				d.previousLoaded(e.previous)
+			case e.theme != nil:
+				reply, err = d.themeLoaded(e.theme)
 			default:
 				err = d.typed(e.keys)
 			}
@@ -404,6 +441,9 @@ func (d *daemon) request(c *server.Call) (func() error, error) {
 		}
 		d.asker.Watch(c, c.Conn(), r.Keys)
 		return nil, nil
+	case protocol.Reload:
+		d.reload(c)
+		return nil, nil
 	case protocol.HasActiveVT:
 		if d.vt == nil {
 			return answer(protocol.Nak{}), nil
@@ -459,15 +499,13 @@ func (d *daemon) apply(req protocol.Request) error {
 		return errors.Join(d.display.Reactivate(), d.reclaim())
 	case protocol.IgnoreKeystroke:
 		return d.asker.Ignore(r.Keys)
-	case protocol.Reload:
-		return d.reload()
 	case protocol.SystemInitialized:
 		d.writable = true
 		return d.reclaim()
 	case protocol.Error:
 		d.cfg.Log.Warn("the boot reported an error")
 	case protocol.Ping, protocol.Quit, protocol.Password, protocol.Question,
-		protocol.CachedPassword, protocol.WatchKeystroke, protocol.HasActiveVT, protocol.NewRoot:
+		protocol.CachedPassword, protocol.WatchKeystroke, protocol.HasActiveVT, protocol.NewRoot, protocol.Reload:
 	}
 	return nil
 }
@@ -485,16 +523,43 @@ func (d *daemon) reclaim() error {
 	return err
 }
 
-func (d *daemon) reload() error {
-	t, err := theme.Load(d.cfg.ThemePath)
-	r, rerr := theme.NewRenderer(t, d.bgrt)
-	if rerr != nil {
-		return errors.Join(err, rerr)
+// reload answers c once the theme is read again, which happens off the loop
+// and one load at a time: calls that arrive during a load wait for the next,
+// so the theme they see was read after they asked.
+func (d *daemon) reload(c *server.Call) {
+	d.reloads = append(d.reloads, c)
+	if !d.reloading {
+		d.loadTheme()
 	}
-	d.renderer, d.units = r, t.Units
-	clear(d.drawn)
-	d.shown = nil
-	return err
+}
+
+func (d *daemon) loadTheme() {
+	calls := d.reloads
+	d.reloads, d.reloading = nil, true
+	go func() {
+		t, err := d.cfg.LoadTheme(d.cfg.ThemePath)
+		r, rerr := theme.NewRenderer(t, d.bgrt)
+		d.post(event{theme: &themeLoad{calls: calls, renderer: r, units: t.Units, err: errors.Join(err, rerr)}})
+	}()
+}
+
+func (d *daemon) themeLoaded(l *themeLoad) (func() error, error) {
+	d.reloading = false
+	if len(d.reloads) > 0 {
+		d.loadTheme()
+	}
+	if l.renderer != nil {
+		d.renderer, d.units = l.renderer, l.units
+		clear(d.drawn)
+		d.shown = nil
+	}
+	return func() error {
+		var errs []error
+		for _, c := range l.calls {
+			errs = append(errs, c.Reply(protocol.Ack{}))
+		}
+		return errors.Join(errs...)
+	}, l.err
 }
 
 func (d *daemon) redraw() error {
@@ -560,6 +625,9 @@ func (d *daemon) quit(retain bool) error {
 	d.quitted = true
 	d.cfg.Log.Info("quitting", "mode", d.cfg.Mode, "retain", retain)
 	errs := []error{d.asker.Close()}
+	for _, c := range d.reloads {
+		errs = append(errs, c.Reply(protocol.Nak{}))
+	}
 	if err := d.display.Close(retain); errors.Is(err, drm.ErrNoCloseFB) {
 		d.cfg.Log.Warn("this kernel has no CLOSEFB, so the splash's last frame goes away with it", "err", err)
 	} else {

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -190,14 +191,16 @@ func listen(t *testing.T, socket string) *server.Server {
 }
 
 type setup struct {
-	mode     Mode
-	noVT     bool
-	screens  int
-	size     image.Point
-	chroot   func(string) error
-	duration string
-	save     func(string, time.Duration) error
-	log      *slog.Logger
+	mode      Mode
+	noVT      bool
+	screens   int
+	size      image.Point
+	chroot    func(string) error
+	duration  string
+	save      func(string, time.Duration) error
+	log       *slog.Logger
+	loadBoot  func(string) (time.Duration, error)
+	loadTheme func(string) (theme.Theme, error)
 }
 
 func saveUnsynced(path string, d time.Duration) error {
@@ -239,7 +242,15 @@ func start(t *testing.T, s setup) *run {
 	if save == nil {
 		save = saveUnsynced
 	}
-	cfg := Config{Mode: s.mode, Server: listen(t, r.socket), Chroot: chroot, BootDuration: r.duration, SaveBootDuration: save, Log: log}
+	load := s.loadBoot
+	if load == nil {
+		load = LoadBootDuration
+	}
+	loadTheme := s.loadTheme
+	if loadTheme == nil {
+		loadTheme = func(string) (theme.Theme, error) { return theme.Default(), nil }
+	}
+	cfg := Config{Mode: s.mode, Server: listen(t, r.socket), Chroot: chroot, BootDuration: r.duration, LoadBootDuration: load, SaveBootDuration: save, LoadTheme: loadTheme, Log: log}
 	go func() {
 		r.done <- Run(ctx, cfg, theme.Default(), nil, Devices{Display: r.display, VT: vt, Console: r.console})
 	}()
@@ -498,7 +509,7 @@ func TestPanicRestoresTheVT(t *testing.T) {
 	display.screens = []Screen{newScreen(image.Pt(64, 64))}
 	vt := newVT()
 	socket := "@lys-splash-daemon-test-" + rand.Text()
-	cfg := Config{Server: listen(t, socket), Chroot: func(string) error { return nil }, Log: slog.New(slog.DiscardHandler)}
+	cfg := Config{Server: listen(t, socket), Chroot: func(string) error { return nil }, LoadBootDuration: LoadBootDuration, Log: slog.New(slog.DiscardHandler)}
 	panicked := make(chan any, 1)
 	go func() {
 		defer func() { panicked <- recover() }()
@@ -710,5 +721,65 @@ func TestAClientThatStopsReadingLeavesTheLoopRunning(t *testing.T) {
 	}
 	if acks >= len(pings) {
 		t.Errorf("the client that stopped reading got all %d replies, want its connection dropped", acks)
+	}
+}
+
+func TestAStalledDiskLeavesTheThrobberTurning(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	boots, themes := make(chan struct{}, 4), make(chan struct{}, 4)
+	loadBoot := func(string) (time.Duration, error) {
+		boots <- struct{}{}
+		<-release
+		return time.Minute, nil
+	}
+	loadTheme := func(string) (theme.Theme, error) {
+		themes <- struct{}{}
+		<-release
+		return theme.Default(), nil
+	}
+	r := start(t, setup{mode: Boot, screens: 1, loadBoot: loadBoot, loadTheme: loadTheme})
+	<-boots
+	r.call(t, protocol.NewRoot{Dir: "/sysroot"}, protocol.Ack{})
+	<-boots
+	reloading := r.dial(t)
+	r.send(t, reloading, protocol.Reload{})
+	<-themes
+	for range 3 {
+		r.advances(t)
+		r.call(t, protocol.Ping{}, protocol.Ack{})
+	}
+	close(release)
+	expect(t, reloading, protocol.Ack{})
+}
+
+func TestReloadsDuringALoadShareTheNextOne(t *testing.T) {
+	t.Parallel()
+	entered, release := make(chan struct{}, 8), make(chan struct{}, 8)
+	var loads atomic.Int32
+	r := start(t, setup{screens: 1, loadTheme: func(string) (theme.Theme, error) {
+		loads.Add(1)
+		entered <- struct{}{}
+		<-release
+		return theme.Default(), nil
+	}})
+	first := r.dial(t)
+	r.send(t, first, protocol.Reload{})
+	<-entered
+	later := make([]net.Conn, 3)
+	for i := range later {
+		later[i] = r.dial(t)
+		r.send(t, later[i], protocol.Reload{})
+	}
+	r.call(t, protocol.Ping{}, protocol.Ack{})
+	release <- struct{}{}
+	expect(t, first, protocol.Ack{})
+	<-entered
+	release <- struct{}{}
+	for _, c := range later {
+		expect(t, c, protocol.Ack{})
+	}
+	if got := loads.Load(); got != 2 {
+		t.Errorf("%d loads for four reloads, want one running and one more for those that came during it", got)
 	}
 }
