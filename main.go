@@ -24,6 +24,7 @@ import (
 	"github.com/stubbedev/lys-lib/atomicfile"
 	"golang.org/x/sys/unix"
 
+	"github.com/stubbedev/lys-splash/internal/asynclog"
 	"github.com/stubbedev/lys-splash/internal/client"
 	"github.com/stubbedev/lys-splash/internal/console"
 	"github.com/stubbedev/lys-splash/internal/daemon"
@@ -40,6 +41,7 @@ const (
 	logsToKmsg    = "kmsg"
 	logsToStderr  = "stderr"
 	readyTimeout  = 30 * time.Second
+	logFlushWait  = 2 * time.Second
 	selfExe       = "/proc/self/exe"
 )
 
@@ -245,7 +247,10 @@ func listen(socket, notify string, log *slog.Logger) (*server.Server, error) {
 	return srv, err
 }
 
-func serve(o options, log *slog.Logger) (err error) {
+func serve(o options, base *slog.Logger) (err error) {
+	logs := asynclog.New(base.Handler())
+	defer logs.Flush(time.After(logFlushWait))
+	log := slog.New(logs)
 	notify := os.Getenv(daemon.NotifyEnv)
 	srv, err := listen(protocol.SocketName, notify, log)
 	if srv == nil {
