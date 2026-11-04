@@ -10,7 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"runtime"
 	"slices"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -184,9 +188,6 @@ func TestPasswordAnsweredLater(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect(t, c, protocol.Answer{Data: []byte("hunter2")})
-	if !bytes.Equal(pending.conn.out, make([]byte, len(pending.conn.out))) {
-		t.Errorf("the answer's encoding is still in the connection's buffer: %q", pending.conn.out)
-	}
 	if err := pending.Reply(protocol.NoAnswer{}); err == nil {
 		t.Error("a second Reply succeeded")
 	}
@@ -327,6 +328,186 @@ func TestPlymouthClient(t *testing.T) {
 		}
 		if !slices.Equal(got, tc.want) {
 			t.Errorf("plymouth %v sent %#v, want %#v", tc.args, got, tc.want)
+		}
+	}
+}
+
+// stalled is a client's socket as a writer sees it once the client stops
+// reading: a write blocks until the test decides how it ends.
+type stalled struct {
+	*net.UnixConn
+	loop    uint64
+	mu      sync.Mutex
+	writes  [][]byte
+	onLoop  int
+	entered chan struct{}
+	end     chan error
+}
+
+func goroutineID() uint64 {
+	buf := make([]byte, 64)
+	n := runtime.Stack(buf, false)
+	id, _, _ := strings.Cut(strings.TrimPrefix(string(buf[:n]), "goroutine "), " ")
+	v, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func (s *stalled) Write(b []byte) (int, error) {
+	s.mu.Lock()
+	s.writes = append(s.writes, b)
+	if goroutineID() == s.loop {
+		s.onLoop++
+	}
+	s.mu.Unlock()
+	s.entered <- struct{}{}
+	if err := <-s.end; err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
+func (s *stalled) counts() (writes, onLoop int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.writes), s.onLoop
+}
+
+func serveStalled(t *testing.T) (*recorder, *stalled, *net.UnixConn) {
+	t.Helper()
+	name := socketName()
+	st := &stalled{loop: goroutineID(), entered: make(chan struct{}, 64), end: make(chan error, 64)}
+	r := &recorder{events: make(chan event, 64), answer: func(*Call) (protocol.Response, bool) { return nil, false }}
+	s, err := Listen(name, uid(), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.wire = func(c *net.UnixConn) wire {
+		st.UnixConn = c
+		return st
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(r) }()
+	t.Cleanup(func() {
+		for range 4 {
+			select {
+			case st.end <- os.ErrDeadlineExceeded:
+			default:
+			}
+		}
+		if err := s.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
+	return r, st, dial(t, name)
+}
+
+func entered(t *testing.T, st *stalled) {
+	t.Helper()
+	select {
+	case <-st.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the writer never wrote")
+	}
+}
+
+func TestAClientThatStopsReadingCostsTheLoopNoWrites(t *testing.T) {
+	t.Parallel()
+	r, st, c := serveStalled(t)
+	send(t, c, "P\x00")
+	call := r.request(t)
+	if err := call.Reply(protocol.Ack{}); err != nil {
+		t.Fatal(err)
+	}
+	entered(t, st)
+	passes := 0
+	for range replyQueue {
+		send(t, c, "P\x00")
+		if err := r.request(t).Reply(protocol.Ack{}); err != nil {
+			t.Fatal(err)
+		}
+		passes++
+	}
+	if writes, onLoop := st.counts(); writes != 1 || onLoop != 0 {
+		t.Errorf("%d socket writes, %d of them on the loop; want the writer's one and none", writes, onLoop)
+	}
+	if passes != replyQueue {
+		t.Errorf("%d loop passes during the stall, want %d", passes, replyQueue)
+	}
+	send(t, c, "P\x00")
+	if err := r.request(t).Reply(protocol.Ack{}); err == nil {
+		t.Error("an overflowing reply was dropped silently")
+	}
+	st.end <- os.ErrDeadlineExceeded
+	if got := r.hangUp(t); got != call.Conn() {
+		t.Errorf("hang-up of %v, want the stalled connection", got)
+	}
+	if writes, onLoop := st.counts(); writes != 1 || onLoop != 0 {
+		t.Errorf("after the drop: %d writes, %d on the loop", writes, onLoop)
+	}
+}
+
+func TestATimedOutWriteDropsTheConnection(t *testing.T) {
+	t.Parallel()
+	r, st, c := serveStalled(t)
+	send(t, c, "P\x00")
+	call := r.request(t)
+	st.end <- os.ErrDeadlineExceeded
+	if err := call.Reply(protocol.Ack{}); err != nil {
+		t.Fatal(err)
+	}
+	entered(t, st)
+	r.hangUp(t)
+	if err := (&Call{Request: protocol.Ping{}, conn: call.Conn()}).Reply(protocol.Ack{}); err != nil {
+		t.Errorf("a reply after the drop: %v", err)
+	}
+	if writes, _ := st.counts(); writes != 1 {
+		t.Errorf("%d writes to a client whose write timed out, want 1", writes)
+	}
+}
+
+func TestQueuedAnswersAreZeroedWrittenOrDropped(t *testing.T) {
+	t.Parallel()
+	r, st, c := serveStalled(t)
+	send(t, c, "P\x00")
+	call := r.request(t)
+	secret := protocol.Answer{Data: []byte("hunter2")}
+	if err := call.Reply(secret); err != nil {
+		t.Fatal(err)
+	}
+	entered(t, st)
+	var held [][]byte
+	conn := call.Conn()
+	for range 3 {
+		if err := (&Call{Request: protocol.Ping{}, conn: conn}).Reply(secret); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range len(conn.queue) {
+		b := <-conn.queue
+		held = append(held, b)
+		conn.queue <- b
+	}
+	st.mu.Lock()
+	held = append(held, st.writes...)
+	st.mu.Unlock()
+	if len(held) != 4 || !bytes.Contains(held[0], secret.Data) {
+		t.Fatalf("held %q, want four encoded answers", held)
+	}
+	st.end <- os.ErrDeadlineExceeded
+	select {
+	case <-conn.drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the writer never drained")
+	}
+	for i, b := range held {
+		if slices.ContainsFunc(b, func(v byte) bool { return v != 0 }) {
+			t.Errorf("reply %d is left in memory: %q", i, b)
 		}
 	}
 }

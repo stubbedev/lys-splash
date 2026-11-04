@@ -688,3 +688,27 @@ func TestThrobberStopsWhileAPromptWaitsAndResumes(t *testing.T) {
 	expect(t, c, protocol.Answer{Data: []byte("hunter2")})
 	r.advances(t)
 }
+
+func TestAClientThatStopsReadingLeavesTheLoopRunning(t *testing.T) {
+	t.Parallel()
+	r := start(t, setup{screens: 1})
+	stalled := r.dial(t)
+	pings := make([]protocol.Request, 5000)
+	for i := range pings {
+		pings[i] = protocol.Ping{}
+	}
+	r.send(t, stalled, pings...)
+	for range 50 {
+		r.call(t, protocol.Ping{}, protocol.Ack{})
+	}
+	acks := 0
+	for {
+		if _, err := protocol.ReadResponse(stalled); err != nil {
+			break
+		}
+		acks++
+	}
+	if acks >= len(pings) {
+		t.Errorf("the client that stopped reading got all %d replies, want its connection dropped", acks)
+	}
+}

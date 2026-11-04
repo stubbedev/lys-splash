@@ -18,7 +18,10 @@ import (
 	"github.com/stubbedev/lys-splash/internal/protocol"
 )
 
-const writeTimeout = 5 * time.Second
+const (
+	writeTimeout = 5 * time.Second
+	replyQueue   = 16
+)
 
 // ErrRunning is what Listen fails with when another daemon already listens
 // on the socket.
@@ -44,14 +47,29 @@ type Handler interface {
 	HangUp(c *Conn)
 }
 
-// Conn is one client connection.
+// wire is the part of a connection its writer uses.
+type wire interface {
+	SetWriteDeadline(t time.Time) error
+	Write(b []byte) (int, error)
+}
+
+// Conn is one client connection. Replies go through a bounded queue to the
+// connection's own writer, so a client that stops reading costs only itself:
+// its connection is dropped once the queue overflows or a write times out.
 type Conn struct {
 	c    *net.UnixConn
+	w    wire
 	peer Peer
+	log  *slog.Logger
 
-	mu   sync.Mutex
-	gone bool
-	out  []byte
+	mu      sync.Mutex
+	gone    bool
+	queue   chan []byte
+	drained chan struct{}
+}
+
+func newConn(c *net.UnixConn, w wire, peer Peer, log *slog.Logger) *Conn {
+	return &Conn{c: c, w: w, peer: peer, log: log, queue: make(chan []byte, replyQueue), drained: make(chan struct{})}
 }
 
 // Peer is the process that opened the connection.
@@ -73,9 +91,10 @@ func (c *Call) Conn() *Conn {
 	return c.conn
 }
 
-// Reply answers the call. A call is answered once; a second Reply fails.
-// When the client has already hung up the answer is dropped without error.
-// The encoded bytes are zeroed once written, since an answer may be a secret.
+// Reply answers the call without waiting for the client: the answer joins the
+// connection's queue. A call is answered once; a second Reply fails. When the
+// client has already hung up the answer is dropped without error. The encoded
+// bytes are zeroed once written or dropped, since an answer may be a secret.
 func (c *Call) Reply(r protocol.Response) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -92,35 +111,82 @@ func (c *Conn) send(r protocol.Response) error {
 	if c.gone {
 		return nil
 	}
-	out, err := protocol.AppendResponse(c.out[:0], r)
-	defer clear(out)
-	c.out = out
+	out, err := protocol.AppendResponse(nil, r)
 	if err != nil {
+		clear(out)
 		return fmt.Errorf("server: encode a %#02x response for pid %d: %w", byte(r.Type()), c.peer.PID, err)
 	}
-	if err := c.c.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
-		return fmt.Errorf("server: set the write deadline for pid %d: %w", c.peer.PID, err)
+	select {
+	case c.queue <- out:
+		return nil
+	default:
 	}
-	if _, err := c.c.Write(out); err != nil {
-		if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
-			c.gone = true
-			return nil
-		}
-		return fmt.Errorf("server: write a %#02x response to pid %d: %w", byte(r.Type()), c.peer.PID, err)
+	clear(out)
+	c.drop()
+	return fmt.Errorf("server: pid %d stopped reading its %d queued replies: dropped a %#02x response and the connection", c.peer.PID, replyQueue, byte(r.Type()))
+}
+
+// drop ends the connection from the writing side: nothing more is queued, and
+// the reader sees its end of the socket close and reports the hang-up.
+func (c *Conn) drop() {
+	c.hangUp()
+	if err := c.c.CloseRead(); err != nil && !errors.Is(err, net.ErrClosed) {
+		c.log.Warn("hanging up a client that stopped reading", "pid", c.peer.PID, "err", err)
 	}
-	return nil
 }
 
 func (c *Conn) hangUp() {
+	if !c.gone {
+		c.gone = true
+		close(c.queue)
+	}
+}
+
+// writeReplies writes what is queued until the connection ends. After a
+// failed write it writes nothing more, only zeroing what is left.
+func (c *Conn) writeReplies() {
+	defer close(c.drained)
+	broken := false
+	for out := range c.queue {
+		if !broken {
+			broken = c.write(out) != nil
+		}
+		clear(out)
+	}
+}
+
+func (c *Conn) write(out []byte) error {
+	err := c.w.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if err == nil {
+		_, err = c.w.Write(out)
+	}
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, syscall.EPIPE) && !errors.Is(err, syscall.ECONNRESET) {
+		c.log.Warn("dropping a client whose reply could not be written", "pid", c.peer.PID, "err", err)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.gone = true
-	clear(c.out)
+	if !c.gone {
+		c.drop()
+	}
+	return err
+}
+
+// finish stops the queue, waits for the writer and so flushes the replies a
+// client that is still reading has yet to get.
+func (c *Conn) finish() {
+	c.mu.Lock()
+	c.hangUp()
+	c.mu.Unlock()
+	<-c.drained
 }
 
 // Server accepts connections and dispatches their requests.
 type Server struct {
 	ln      *net.UnixListener
+	wire    func(*net.UnixConn) wire
 	owner   uint32
 	handler Handler
 	log     *slog.Logger
@@ -144,7 +210,7 @@ func Listen(name string, owner uint32, log *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("server: listen on %s: %w", name, err)
 	}
-	return &Server{ln: ln, owner: owner, log: log, conns: map[*Conn]struct{}{}}, nil
+	return &Server{ln: ln, wire: func(c *net.UnixConn) wire { return c }, owner: owner, log: log, conns: map[*Conn]struct{}{}}, nil
 }
 
 // Serve hands every request to h and accepts connections until Close, then
@@ -165,11 +231,12 @@ func (s *Server) Serve(h Handler) error {
 			s.close(c, 0)
 			continue
 		}
-		conn := &Conn{c: c, peer: peer}
+		conn := newConn(c, s.wire(c), peer, s.log)
 		if !s.track(conn) {
 			s.close(c, peer.PID)
 			return nil
 		}
+		go conn.writeReplies()
 		go s.serve(conn)
 	}
 }
@@ -206,7 +273,7 @@ func peerOf(c *net.UnixConn) (Peer, error) {
 func (s *Server) serve(c *Conn) {
 	defer s.wg.Done()
 	defer func() {
-		c.hangUp()
+		c.finish()
 		s.close(c.c, c.peer.PID)
 		s.mu.Lock()
 		delete(s.conns, c)
