@@ -388,8 +388,7 @@ func (d *daemon) loop(ctx context.Context) error {
 			var changed bool
 			changed, err = d.display.Handle(e)
 			d.stale = d.stale || changed
-			var flip *kms.FlipError
-			if errors.As(err, &flip) {
+			if flip, ok := errors.AsType[*kms.FlipError](err); ok {
 				d.presentFailed(flip.Output, d.drawn[flip.Output])
 				d.nextRetry()
 			}

@@ -266,8 +266,10 @@ type countingHandler struct {
 
 func (countingHandler) Enabled(context.Context, slog.Level) bool { return true }
 
-func (h countingHandler) Handle(context.Context, slog.Record) error {
-	h.records.Add(1)
+func (h countingHandler) Handle(_ context.Context, r slog.Record) error {
+	if r.Level >= slog.LevelWarn {
+		h.records.Add(1)
+	}
 	return nil
 }
 
