@@ -328,7 +328,7 @@ func TestUnlitConnectorModesetsThePreferredMode(t *testing.T) {
 	if len(d.commits) != 0 {
 		t.Fatalf("%d commits before the first Present", len(d.commits))
 	}
-	if err := o.Present(image.Rectangle{Max: o.Frame().Size}); err != nil {
+	if err := o.Present(DamageOf(image.Rectangle{Max: o.Frame().Size})); err != nil {
 		t.Fatal(err)
 	}
 	cs := d.real()
@@ -357,7 +357,7 @@ func TestLitCRTCKeepsItsModeWithoutModeset(t *testing.T) {
 	if o.Frame().Size != image.Pt(1366, 768) {
 		t.Errorf("frame %v, want the lit 1366x768", o.Frame().Size)
 	}
-	if err := o.Present(image.Rectangle{Max: o.Frame().Size}); err != nil {
+	if err := o.Present(DamageOf(image.Rectangle{Max: o.Frame().Size})); err != nil {
 		t.Fatal(err)
 	}
 	cs := d.real()
@@ -378,7 +378,7 @@ func TestLitModeRefusedFallsBackToModeset(t *testing.T) {
 		return nil
 	}
 	o := openFake(t, d, false, &Scaler{}).Outputs()[0]
-	if err := o.Present(image.Rectangle{Max: o.Frame().Size}); err != nil {
+	if err := o.Present(DamageOf(image.Rectangle{Max: o.Frame().Size})); err != nil {
 		t.Fatal(err)
 	}
 	if cs := d.real(); len(cs) != 1 || cs[0].flags&drm.AtomicAllowModeset == 0 {
@@ -409,7 +409,7 @@ func TestPanelOrientationTurnsTheFrame(t *testing.T) {
 		t.Fatalf("rotation %v frame %v, want clockwise 1280x800", o.Rotation(), o.Frame().Size)
 	}
 	setPixel(o.Frame(), 0, 0, 0xff112233)
-	if err := o.Present(image.Rect(0, 0, 1, 1)); err != nil {
+	if err := o.Present(DamageOf(image.Rect(0, 0, 1, 1))); err != nil {
 		t.Fatal(err)
 	}
 	fb := d.fbs[uint32(d.real()[0].values[20]["FB_ID"])]
@@ -433,7 +433,7 @@ func TestFlipsArePacedAndDamageLimited(t *testing.T) {
 	for i := range f.Pix {
 		f.Pix[i] = 0x11
 	}
-	if err := o.Present(image.Rectangle{Max: f.Size}); err != nil {
+	if err := o.Present(DamageOf(image.Rectangle{Max: f.Size})); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flipped(drm.FlipEvent{UserData: 10}); err != nil {
@@ -441,10 +441,10 @@ func TestFlipsArePacedAndDamageLimited(t *testing.T) {
 	}
 	throbber := image.Rect(10, 10, 14, 12)
 	setPixel(f, 11, 11, 0xffabcdef)
-	if err := o.Present(throbber); err != nil {
+	if err := o.Present(DamageOf(throbber)); err != nil {
 		t.Fatal(err)
 	}
-	if err := o.Present(throbber); err != nil {
+	if err := o.Present(DamageOf(throbber)); err != nil {
 		t.Fatal(err)
 	}
 	cs := d.real()
@@ -483,13 +483,13 @@ func TestDamageClipsFollowRotation(t *testing.T) {
 	conn.props["panel orientation"] = 1
 	c := openFake(t, d, false, &Scaler{})
 	o := c.Outputs()[0]
-	if err := o.Present(image.Rectangle{Max: o.Frame().Size}); err != nil {
+	if err := o.Present(DamageOf(image.Rectangle{Max: o.Frame().Size})); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flipped(drm.FlipEvent{UserData: 10}); err != nil {
 		t.Fatal(err)
 	}
-	if err := o.Present(image.Rect(0, 0, 10, 5)); err != nil {
+	if err := o.Present(DamageOf(image.Rect(0, 0, 10, 5))); err != nil {
 		t.Fatal(err)
 	}
 	clip := d.created[uint32(d.real()[1].values[20]["FB_DAMAGE_CLIPS"])]
@@ -509,7 +509,7 @@ func TestDeactivateAndReactivate(t *testing.T) {
 	d.connect(40, [2]uint32{531, 299}, mode(64, 32, true))
 	c := openFake(t, d, false, &Scaler{})
 	o := c.Outputs()[0]
-	if err := o.Present(image.Rectangle{Max: o.Frame().Size}); err != nil {
+	if err := o.Present(DamageOf(image.Rectangle{Max: o.Frame().Size})); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Flipped(drm.FlipEvent{UserData: 10}); err != nil {
@@ -521,7 +521,7 @@ func TestDeactivateAndReactivate(t *testing.T) {
 	if d.master {
 		t.Error("still master after Deactivate")
 	}
-	if err := o.Present(image.Rect(0, 0, 4, 4)); err != nil {
+	if err := o.Present(DamageOf(image.Rect(0, 0, 4, 4))); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(d.real()); got != 1 {
@@ -550,7 +550,7 @@ func TestReleaseRetainsTheFrameOnScreen(t *testing.T) {
 		d.connect(40, [2]uint32{531, 299}, mode(64, 32, true))
 		c := openFake(t, d, false, &Scaler{})
 		o := c.Outputs()[0]
-		if err := o.Present(image.Rectangle{Max: o.Frame().Size}); err != nil {
+		if err := o.Present(DamageOf(image.Rectangle{Max: o.Frame().Size})); err != nil {
 			t.Fatal(err)
 		}
 		shown := uint32(d.real()[0].values[20]["FB_ID"])
@@ -908,7 +908,7 @@ func TestDamageClipsBlobIsReusedWhileTheDamageStays(t *testing.T) {
 	o := c.Outputs()[0]
 	step := func(r image.Rectangle) uint32 {
 		t.Helper()
-		if err := o.Present(r); err != nil {
+		if err := o.Present(DamageOf(r)); err != nil {
 			t.Fatal(err)
 		}
 		cs := d.real()
@@ -933,8 +933,21 @@ func TestDamageClipsBlobIsReusedWhileTheDamageStays(t *testing.T) {
 	if moved == first {
 		t.Fatal("moved damage kept the old blob")
 	}
+	if got := step(throbber); got != first {
+		t.Errorf("damage seen before used blob %d, want its blob %d again", got, first)
+	}
+	if got := step(image.Rect(20, 20, 24, 22)); got != moved {
+		t.Errorf("damage seen before used blob %d, want its blob %d again", got, moved)
+	}
+	for i := range damageBlobs {
+		x := 30 + 2*i
+		step(image.Rect(x, 0, x+1, 1))
+	}
 	if _, ok := d.blobs[first]; ok {
-		t.Error("the old damage clips blob outlived its replacement")
+		t.Error("a damage clips blob outlived the ones that replaced it")
+	}
+	if got := len(d.blobs); got != base+damageBlobs {
+		t.Errorf("%d blobs live, want %d more than the %d before", got, damageBlobs, base)
 	}
 	if err := c.Release(false); err != nil {
 		t.Fatal(err)
@@ -995,7 +1008,7 @@ func TestAFlipAllocatesNothing(t *testing.T) {
 	c := openFake(t, d, false, &Scaler{})
 	o := c.Outputs()[0]
 	d.forget = true
-	if err := o.Present(image.Rectangle{Max: o.Frame().Size}); err != nil {
+	if err := o.Present(DamageOf(image.Rectangle{Max: o.Frame().Size})); err != nil {
 		t.Fatal(err)
 	}
 	throbber := image.Rect(100, 100, 140, 140)
@@ -1004,7 +1017,7 @@ func TestAFlipAllocatesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n := testing.AllocsPerRun(100, func() {
-		if err := o.Present(throbber); err != nil {
+		if err := o.Present(DamageOf(throbber)); err != nil {
 			t.Fatal(err)
 		}
 		if err := c.Flipped(flip); err != nil {
@@ -1036,7 +1049,7 @@ func BenchmarkFlip(b *testing.B) {
 	}
 	o := c.Outputs()[0]
 	d.forget = true
-	if err := o.Present(image.Rectangle{Max: o.Frame().Size}); err != nil {
+	if err := o.Present(DamageOf(image.Rectangle{Max: o.Frame().Size})); err != nil {
 		b.Fatal(err)
 	}
 	throbber := image.Rect(100, 100, 140, 140)
@@ -1046,8 +1059,103 @@ func BenchmarkFlip(b *testing.B) {
 		if err := c.Flipped(flip); err != nil {
 			b.Fatal(err)
 		}
-		if err := o.Present(throbber); err != nil {
+		if err := o.Present(DamageOf(throbber)); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+func TestSeparateDamageStaysSeparateInTheClipsAndTheCopy(t *testing.T) {
+	t.Parallel()
+	d := newFakeDevice("/dev/dri/card0", 1)
+	d.connect(40, [2]uint32{531, 299}, mode(64, 32, true))
+	c := openFake(t, d, false, &Scaler{})
+	o := c.Outputs()[0]
+	f := o.Frame()
+	if err := o.Present(DamageOf(image.Rectangle{Max: f.Size})); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flipped(drm.FlipEvent{UserData: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Present(DamageOf(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flipped(drm.FlipEvent{UserData: 10}); err != nil {
+		t.Fatal(err)
+	}
+	setPixel(f, 1, 1, 0xff000001)
+	setPixel(f, 60, 30, 0xff000002)
+	setPixel(f, 30, 15, 0xff000003)
+	if err := o.Present(DamageOf(image.Rect(0, 0, 2, 2), image.Rect(60, 30, 62, 32))); err != nil {
+		t.Fatal(err)
+	}
+	cs := d.real()
+	clip := d.created[uint32(cs[len(cs)-1].values[20]["FB_DAMAGE_CLIPS"])]
+	if len(clip) != 32 {
+		t.Fatalf("damage clips blob of %d bytes, want two rectangles", len(clip))
+	}
+	shown := o.bufs[1-o.back].dumb
+	dev := Frame{Pix: shown.Pix, Stride: int(shown.Pitch), Size: f.Size}
+	if pixelAt(dev, 1, 1) != 0xff000001 || pixelAt(dev, 60, 30) != 0xff000002 {
+		t.Error("a damaged rectangle was not copied")
+	}
+	if pixelAt(dev, 30, 15) == 0xff000003 {
+		t.Error("the pixels between two rectangles were copied")
+	}
+}
+
+func TestADotsTurnCreatesEachClipsBlobOnce(t *testing.T) {
+	t.Parallel()
+	d := newFakeDevice("/dev/dri/card0", 1)
+	d.connect(40, [2]uint32{531, 299}, mode(64, 32, true))
+	c := openFake(t, d, false, &Scaler{})
+	o := c.Outputs()[0]
+	if err := o.Present(DamageOf(image.Rectangle{Max: o.Frame().Size})); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flipped(drm.FlipEvent{UserData: 10}); err != nil {
+		t.Fatal(err)
+	}
+	dots := []image.Rectangle{image.Rect(10, 10, 12, 12), image.Rect(20, 10, 22, 12), image.Rect(30, 10, 32, 12)}
+	base := len(d.created)
+	for step := range 3 * 100 {
+		if err := o.Present(DamageOf(dots[step%3], dots[(step+1)%3])); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Flipped(drm.FlipEvent{UserData: 10}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(d.created) - base; got != 3 {
+		t.Errorf("%d blobs created in 100 turns, want the 3 sets of damage once each", got)
+	}
+}
+
+func TestDamageKeepsRectanglesApartAndMergesOverlaps(t *testing.T) {
+	t.Parallel()
+	a, b := image.Rect(0, 0, 10, 10), image.Rect(100, 100, 110, 110)
+	d := DamageOf(a, b, image.Rect(5, 5, 15, 15), image.Rectangle{})
+	if got := d.Rects(); len(got) != 2 {
+		t.Fatalf("rectangles %v, want the overlapping two merged and the far one apart", got)
+	}
+	for i := range 3 * maxDamageRects {
+		d.Add(image.Rect(i*100, 500, i*100+5, 505))
+	}
+	if got := d.Rects(); len(got) > maxDamageRects {
+		t.Fatalf("%d rectangles", len(got))
+	}
+	for i := range 3 * maxDamageRects {
+		p := image.Pt(i*100, 500)
+		if !slices.ContainsFunc(d.Rects(), p.In) {
+			t.Errorf("past the capacity %v lost its damage", p)
+		}
+	}
+	for i, r := range d.Rects() {
+		for _, o := range d.Rects()[i+1:] {
+			if r.Overlaps(o) {
+				t.Errorf("%v overlaps %v", r, o)
+			}
 		}
 	}
 }

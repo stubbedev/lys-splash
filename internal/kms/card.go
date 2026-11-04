@@ -465,15 +465,25 @@ type Output struct {
 	inherited bool
 	flipping  bool
 	pending   bool
-	damage    image.Rectangle
-	clips     uint32
-	clipsOf   image.Rectangle
+	damage    Damage
+	clips     [damageBlobs]damageBlob
+	commits   uint64
 }
 
 type buffer struct {
 	dumb  drm.Dumb
 	fb    uint32
-	stale image.Rectangle
+	stale Damage
+}
+
+// damageBlobs is how many sets of damage rectangles an output keeps a blob
+// for: the dots step through three, and a blob costs two ioctls to replace.
+const damageBlobs = 4
+
+type damageBlob struct {
+	id   uint32
+	of   Damage
+	used uint64
 }
 
 func (o *Output) allocate() error {
@@ -522,9 +532,11 @@ func (o *Output) release(retain bool) error {
 		errs = append(errs, dev.DestroyBlob(o.modeBlob))
 		o.modeBlob = 0
 	}
-	if o.clips != 0 {
-		errs = append(errs, dev.DestroyBlob(o.clips))
-		o.clips = 0
+	for i := range o.clips {
+		if id := o.clips[i].id; id != 0 {
+			errs = append(errs, dev.DestroyBlob(id))
+			o.clips[i] = damageBlob{}
+		}
 	}
 	o.crtc.taken, o.plane.taken = false, false
 	if err := errors.Join(errs...); err != nil {
@@ -558,12 +570,12 @@ func (o *Output) Frame() Frame {
 // Present. A frame presented while the previous one still waits for its
 // vblank goes out on that vblank's flip event, so frames flip at most once
 // per vblank.
-func (o *Output) Present(damage image.Rectangle) error {
-	damage = damage.Intersect(image.Rectangle{Max: o.frame.Size})
+func (o *Output) Present(damage Damage) error {
+	damage.Intersect(image.Rectangle{Max: o.frame.Size})
 	for i := range o.bufs {
-		o.bufs[i].stale = o.bufs[i].stale.Union(damage)
+		o.bufs[i].stale.Merge(&damage)
 	}
-	o.damage = o.damage.Union(damage)
+	o.damage.Merge(&damage)
 	o.pending = true
 	if o.flipping || o.card.paused {
 		return nil
@@ -581,8 +593,11 @@ func (o *Output) flipped() error {
 
 func (o *Output) flip() error {
 	b := &o.bufs[o.back]
-	Blit(Frame{Pix: b.dumb.Pix, Stride: int(b.dumb.Pitch), Size: modeSize(o.mode)}, o.frame, b.stale, o.rotation)
-	b.stale = image.Rectangle{}
+	scanout := Frame{Pix: b.dumb.Pix, Stride: int(b.dumb.Pitch), Size: modeSize(o.mode)}
+	for _, r := range b.stale.Rects() {
+		Blit(scanout, o.frame, r, o.rotation)
+	}
+	b.stale = Damage{}
 	clips, err := o.damageClips()
 	if err != nil {
 		return err
@@ -603,36 +618,56 @@ func (o *Output) flip() error {
 		return fmt.Errorf("kms: %s: commit a frame to %s: %w", o.card.dev.Path(), o.name, err)
 	}
 	o.committed, o.modeset, o.flipping, o.pending = true, false, true, false
-	o.damage = image.Rectangle{}
+	o.damage = Damage{}
 	o.back = 1 - o.back
 	return nil
 }
 
-// damageClips is the blob of the damage rectangles for this commit, the last
-// one again when the damage is where it was: an animation damages the same
-// rectangle frame after frame.
+// damageClips is the blob of the damage rectangles for this commit, kept for
+// the next time the damage is the same: an animation damages the same few sets
+// of rectangles over and over.
 func (o *Output) damageClips() (uint32, error) {
 	if o.plane.damageClips == 0 || o.damage.Empty() || o.modeset {
 		return 0, nil
 	}
-	r := o.rotation.Device(o.frame.Size, o.damage)
-	if o.clips != 0 && r == o.clipsOf {
-		return o.clips, nil
+	var device Damage
+	for _, r := range o.damage.Rects() {
+		device.Add(o.rotation.Device(o.frame.Size, r))
 	}
-	var rect [16]byte
-	for i, v := range []int{r.Min.X, r.Min.Y, r.Max.X, r.Max.Y} {
-		binary.NativeEndian.PutUint32(rect[i*4:], intconv.Uint32Bits(intconv.Must[int32](v)))
+	o.commits++
+	oldest := 0
+	for i := range o.clips {
+		c := &o.clips[i]
+		if c.id != 0 && c.of == device {
+			c.used = o.commits
+			return c.id, nil
+		}
+		if c.used < o.clips[oldest].used {
+			oldest = i
+		}
 	}
-	id, err := o.card.dev.CreateBlob(rect[:])
+	return o.keepClips(oldest, &device)
+}
+
+func (o *Output) keepClips(slot int, device *Damage) (uint32, error) {
+	rects := device.Rects()
+	data := make([]byte, 0, len(rects)*16)
+	for _, r := range rects {
+		for _, v := range []int{r.Min.X, r.Min.Y, r.Max.X, r.Max.Y} {
+			data = binary.NativeEndian.AppendUint32(data, intconv.Uint32Bits(intconv.Must[int32](v)))
+		}
+	}
+	id, err := o.card.dev.CreateBlob(data)
 	if err != nil {
 		return 0, fmt.Errorf("kms: %s: damage clips for %s: %w", o.card.dev.Path(), o.name, err)
 	}
-	if o.clips != 0 {
-		if derr := o.card.dev.DestroyBlob(o.clips); derr != nil {
+	c := &o.clips[slot]
+	if c.id != 0 {
+		if derr := o.card.dev.DestroyBlob(c.id); derr != nil {
 			o.card.log.Warn("destroying the damage clips", "connector", o.name, "err", derr)
 		}
 	}
-	o.clips, o.clipsOf = id, r
+	*c = damageBlob{id: id, of: *device, used: o.commits}
 	return id, nil
 }
 

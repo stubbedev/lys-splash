@@ -26,7 +26,7 @@ func (s *quietScreen) Frame() kms.Frame {
 
 func (s *quietScreen) Scale() int { return 1 }
 
-func (s *quietScreen) Present(image.Rectangle) error {
+func (s *quietScreen) Present(kms.Damage) error {
 	s.presents++
 	return nil
 }

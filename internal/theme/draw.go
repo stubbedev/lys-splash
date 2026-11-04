@@ -139,12 +139,12 @@ func (r *Renderer) layout(size image.Point, scale int) layout {
 }
 
 // Draw brings frame f, shown at scale, from prev to cur and returns the
-// rectangle it changed. With prev nil the whole frame is drawn; otherwise
-// only the parts whose state differs are redrawn, so a throbber step
-// changes the throbber alone.
-func (r *Renderer) Draw(f kms.Frame, scale int, prev *State, cur State) (image.Rectangle, error) {
+// rectangles it changed. With prev nil the whole frame is drawn; otherwise only
+// the pixels whose state differs are redrawn: the entry for a key typed, the
+// text's extent for a message, the columns between two fills of a bar.
+func (r *Renderer) Draw(f kms.Frame, scale int, prev *State, cur State) (kms.Damage, error) {
 	if scale < 1 {
-		return image.Rectangle{}, fmt.Errorf("theme: scale %d is not positive", scale)
+		return kms.Damage{}, fmt.Errorf("theme: scale %d is not positive", scale)
 	}
 	cv := r.cv.Reset(f.Pix, f.Stride, f.Size.X, f.Size.Y, 1, 1)
 	l := r.layout(f.Size, scale)
@@ -152,46 +152,125 @@ func (r *Renderer) Draw(f kms.Frame, scale int, prev *State, cur State) (image.R
 	if prev == nil || prev.Hidden != cur.Hidden {
 		r.clear(cv, full)
 		if cur.Hidden {
-			return full, nil
+			return kms.DamageOf(full), nil
 		}
 		if err := r.logo(cv, l); err != nil {
-			return image.Rectangle{}, err
+			return kms.Damage{}, err
 		}
 		r.busy(cv, l, cur)
 		r.bootProgress(cv, l, cur)
 		r.message(cv, l, cur.Message)
 		r.prompt(cv, l, cur.Prompt)
-		return full, nil
+		return kms.DamageOf(full), nil
 	}
 	if cur.Hidden {
-		return image.Rectangle{}, nil
+		return kms.Damage{}, nil
 	}
-	var damage image.Rectangle
+	var damage kms.Damage
 	switch {
-	case prev.Updating != cur.Updating || cur.Updating && prev.Progress != cur.Progress:
+	case prev.Updating != cur.Updating:
 		r.clear(cv, l.busy)
 		r.busy(cv, l, cur)
-		damage = damage.Union(l.busy)
+		damage.Add(l.busy)
+	case cur.Updating && prev.Progress != cur.Progress:
+		damage.Add(r.moveBar(cv, l.updateBar(), prev.Progress, cur.Progress))
 	case !cur.Updating && r.step(prev.Phase) != r.step(cur.Phase):
-		r.stepThrobber(f, cv, l, cur.Phase)
-		damage = damage.Union(l.throb)
+		r.stepThrobber(f, cv, l, prev.Phase, cur.Phase, &damage)
 	}
-	if bootShown(*prev) != bootShown(cur) || bootShown(cur) && prev.Progress != cur.Progress {
+	switch {
+	case bootShown(*prev) != bootShown(cur):
 		r.clear(cv, l.boot)
 		r.bootProgress(cv, l, cur)
-		damage = damage.Union(l.boot)
+		damage.Add(l.boot)
+	case bootShown(cur) && prev.Progress != cur.Progress:
+		damage.Add(r.moveBar(cv, l.boot, prev.Progress, cur.Progress))
 	}
 	if prev.Message != cur.Message {
-		r.clear(cv, l.message)
-		r.message(cv, l, cur.Message)
-		damage = damage.Union(l.message)
+		damage.Add(r.redrawLine(cv, l.message, prev.Message, cur.Message, float64(textSize*scale)))
 	}
 	if prev.Prompt != cur.Prompt {
-		r.clear(cv, l.prompt)
-		r.prompt(cv, l, cur.Prompt)
-		damage = damage.Union(l.prompt)
+		r.redrawPrompt(cv, l, prev.Prompt, cur.Prompt, &damage)
 	}
-	return damage.Intersect(full), nil
+	damage.Intersect(full)
+	return damage, nil
+}
+
+// fillEnd is the column a bar's fill reaches at p.
+func fillEnd(track image.Rectangle, p protocol.Percent) int {
+	return track.Min.X + track.Dx()*int(p)/int(protocol.MaxPercent)
+}
+
+// moveBar brings a bar from one fill to another and returns the columns that
+// changed: those between the two ends and the rounded end of the shorter fill,
+// or from the track's start when that fill is too short to have a straight
+// middle, since then its left end changes shape too.
+func (r *Renderer) moveBar(cv *render.Canvas, track image.Rectangle, from, to protocol.Percent) image.Rectangle {
+	a, b := fillEnd(track, from), fillEnd(track, to)
+	if a > b {
+		a, b = b, a
+	}
+	if a == b {
+		return image.Rectangle{}
+	}
+	radius := track.Dy() / 2
+	start := a - radius
+	if a-track.Min.X < 2*radius {
+		start = track.Min.X
+	}
+	band := image.Rect(start, track.Min.Y, b, track.Max.Y)
+	r.clear(cv, band)
+	clip := cv.PushClip(rect(band))
+	r.bar(cv, track, to)
+	cv.PopClip(clip)
+	return band
+}
+
+// textExtent is the part of box that centred text at px can reach, with room
+// for what a glyph's outline overhangs its advance.
+func (r *Renderer) textExtent(box image.Rectangle, s string, px float64) image.Rectangle {
+	if s == "" {
+		return image.Rectangle{}
+	}
+	half := (int(math.Ceil(r.face.Shape(s, px).Advance())) + int(px)) / 2
+	mid := (box.Min.X + box.Max.X) / 2
+	return image.Rect(mid-half, box.Min.Y, mid+half, box.Max.Y).Intersect(box)
+}
+
+func (r *Renderer) redrawLine(cv *render.Canvas, box image.Rectangle, from, to string, px float64) image.Rectangle {
+	extent := r.textExtent(box, from, px).Union(r.textExtent(box, to, px))
+	r.clear(cv, extent)
+	r.line(cv, box, to, px)
+	return extent
+}
+
+func (r *Renderer) line(cv *render.Canvas, box image.Rectangle, s string, px float64) {
+	if s == "" {
+		return
+	}
+	clip := cv.PushClip(rect(box))
+	r.face.DrawAligned(cv, s, rect(box), px, r.theme.Foreground, render.AlignCenter)
+	cv.PopClip(clip)
+}
+
+func (r *Renderer) redrawPrompt(cv *render.Canvas, l layout, from, to Prompt, damage *kms.Damage) {
+	if from.Text != to.Text {
+		damage.Add(r.redrawLine(cv, l.promptLine(), from.Text, to.Text, float64(textSize*l.scale)))
+	}
+	switch {
+	case (from.Kind == NoPrompt) != (to.Kind == NoPrompt):
+		entry := l.entry()
+		r.clear(cv, entry)
+		if to.Kind != NoPrompt {
+			r.entryBorder(cv, l)
+			r.shown(cv, l, to)
+		}
+		damage.Add(entry)
+	case to.Kind != NoPrompt && (from.Shown != to.Shown || from.Kind != to.Kind):
+		inner := l.entryInner()
+		r.clear(cv, inner)
+		r.shown(cv, l, to)
+		damage.Add(inner)
+	}
 }
 
 func rect(r image.Rectangle) render.Rect {
@@ -231,14 +310,18 @@ func (r *Renderer) dim() render.Color {
 	return mix(r.theme.Background, r.theme.Accent, 1, 4)
 }
 
+func (l layout) updateBar() image.Rectangle {
+	c := l.busy.Min.Add(l.busy.Max).Div(2)
+	w, h := barWidth*l.scale, barHeight*l.scale
+	return image.Rect(c.X-w/2, c.Y-h/2, c.X+w/2, c.Y+h/2)
+}
+
 func (r *Renderer) busy(cv *render.Canvas, l layout, s State) {
 	if !s.Updating {
 		r.throbber(cv, l, s.Phase)
 		return
 	}
-	c := l.busy.Min.Add(l.busy.Max).Div(2)
-	w, h := barWidth*l.scale, barHeight*l.scale
-	r.bar(cv, image.Rect(c.X-w/2, c.Y-h/2, c.X+w/2, c.Y+h/2), s.Progress)
+	r.bar(cv, l.updateBar(), s.Progress)
 }
 
 // step is which of the throbber's distinct pictures phase shows.
@@ -259,34 +342,66 @@ func (r *Renderer) PhasesToNextPicture(phase int) int {
 	return ((phase*dotCount/Frames+1)*Frames+dotCount-1)/dotCount - phase
 }
 
-// stepThrobber brings the throbber's rectangle to phase. Each picture is
-// computed per pixel once and copied from then on, since a boot repeats the
-// same few dozen for as long as it lasts.
-func (r *Renderer) stepThrobber(f kms.Frame, cv *render.Canvas, l layout, phase int) {
+// stepThrobber brings the throbber from one phase to another and adds what
+// changed to damage: the two dots that swap, or the whole of a spinner. Each
+// picture is computed per pixel once and copied from then on, since a boot
+// repeats the same few dozen for as long as it lasts.
+func (r *Renderer) stepThrobber(f kms.Frame, cv *render.Canvas, l layout, from, to int, damage *kms.Damage) {
 	at := l.throb
 	if !at.In(image.Rectangle{Max: f.Size}) {
 		r.clear(cv, at)
-		r.throbber(cv, l, phase)
+		r.throbber(cv, l, to)
+		damage.Add(at)
 		return
 	}
-	key := throbberStep{l.scale, r.step(phase)}
+	key := throbberStep{l.scale, r.step(to)}
 	row := at.Dx() * kms.BytesPerPixel
 	saved, cached := r.steps[key]
 	if !cached {
 		r.clear(cv, at)
-		r.throbber(cv, l, phase)
+		r.throbber(cv, l, to)
 		saved = make([]byte, row*at.Dy())
 		r.steps[key] = saved
-	}
-	for y := range at.Dy() {
-		shown := f.Pix[(at.Min.Y+y)*f.Stride+at.Min.X*kms.BytesPerPixel:][:row]
-		kept := saved[y*row:][:row]
-		if cached {
-			copy(shown, kept)
-		} else {
-			copy(kept, shown)
+		for y := range at.Dy() {
+			copy(saved[y*row:][:row], f.Pix[(at.Min.Y+y)*f.Stride+at.Min.X*kms.BytesPerPixel:])
 		}
 	}
+	if r.theme.Throbber != Dots {
+		if cached {
+			restore(f, saved, at, at)
+		}
+		damage.Add(at)
+		return
+	}
+	for _, step := range [...]int{r.step(from), r.step(to)} {
+		dot := l.dot(step)
+		if cached {
+			restore(f, saved, at, dot)
+		}
+		damage.Add(dot)
+	}
+}
+
+// restore copies region of the picture saved of rectangle at back to the frame.
+func restore(f kms.Frame, saved []byte, at, region image.Rectangle) {
+	row := at.Dx() * kms.BytesPerPixel
+	n := region.Dx() * kms.BytesPerPixel
+	for y := region.Min.Y; y < region.Max.Y; y++ {
+		x := (region.Min.X - at.Min.X) * kms.BytesPerPixel
+		copy(f.Pix[y*f.Stride+region.Min.X*kms.BytesPerPixel:][:n], saved[(y-at.Min.Y)*row+x:][:n])
+	}
+}
+
+func (l layout) dotSize() int {
+	return throbberSize * l.scale / 4
+}
+
+// dot is where the throbber's dot i lies.
+func (l layout) dot(i int) image.Rectangle {
+	c := l.throb.Min.Add(l.throb.Max).Div(2)
+	d := l.dotSize()
+	x := c.X + (i-1)*d*3/2 - d/2
+	return image.Rect(x, c.Y-d/2, x+d, c.Y-d/2+d)
 }
 
 func (r *Renderer) throbber(cv *render.Canvas, l layout, phase int) {
@@ -301,14 +416,13 @@ func (r *Renderer) throbber(cv *render.Canvas, l layout, phase int) {
 		cv.Arc(float64(c.X), float64(c.Y), radius, width, 0, 2*math.Pi, dim)
 		cv.Arc(float64(c.X), float64(c.Y), radius, width, 2*math.Pi*float64(step)/Frames-math.Pi/2, math.Pi/2, r.theme.Accent)
 	case Dots:
-		d := int(size / 4)
+		d := l.dotSize()
 		for i := range dotCount {
 			col := dim
 			if i == step {
 				col = r.theme.Accent
 			}
-			x := c.X + (i-1)*d*3/2
-			cv.RoundedRect(render.Rect{X: x - d/2, Y: c.Y - d/2, W: d, H: d}, d/2, col)
+			cv.RoundedRect(rect(l.dot(i)), d/2, col)
 		}
 	}
 }
@@ -327,36 +441,54 @@ func (r *Renderer) bar(cv *render.Canvas, track image.Rectangle, p protocol.Perc
 	radius := track.Dy() / 2
 	cv.RoundedRect(rect(track), radius, r.dim())
 	fill := track
-	fill.Max.X = track.Min.X + track.Dx()*int(p)/int(protocol.MaxPercent)
+	fill.Max.X = fillEnd(track, p)
 	if fill.Dx() > 0 {
 		cv.RoundedRect(rect(fill), radius, r.theme.Accent)
 	}
 }
 
 func (r *Renderer) message(cv *render.Canvas, l layout, msg string) {
-	if msg == "" {
-		return
-	}
-	r.face.DrawAligned(cv, msg, rect(l.message), float64(textSize*l.scale), r.theme.Foreground, render.AlignCenter)
+	r.line(cv, l.message, msg, float64(textSize*l.scale))
+}
+
+func (l layout) promptLine() image.Rectangle {
+	line := l.prompt
+	line.Max.Y = line.Min.Y + lineHeight*l.scale
+	return line
+}
+
+func (l layout) entry() image.Rectangle {
+	s := l.scale
+	c := (l.prompt.Min.X + l.prompt.Max.X) / 2
+	w := min(entryWidth*s, l.prompt.Dx())
+	return image.Rect(c-w/2, l.promptLine().Max.Y+gapInForm*s, c+w/2, l.prompt.Max.Y)
+}
+
+func (l layout) entryInner() image.Rectangle {
+	return l.entry().Inset(entryHeight * l.scale / 4)
 }
 
 func (r *Renderer) prompt(cv *render.Canvas, l layout, p Prompt) {
 	if p.Kind == NoPrompt {
 		return
 	}
+	r.line(cv, l.promptLine(), p.Text, float64(textSize*l.scale))
+	r.entryBorder(cv, l)
+	r.shown(cv, l, p)
+}
+
+func (r *Renderer) entryBorder(cv *render.Canvas, l layout) {
 	s := l.scale
-	px := float64(textSize * s)
-	text := l.prompt
-	text.Max.Y = text.Min.Y + lineHeight*s
-	r.face.DrawAligned(cv, p.Text, rect(text), px, r.theme.Foreground, render.AlignCenter)
-	c := (l.prompt.Min.X + l.prompt.Max.X) / 2
-	w := min(entryWidth*s, l.prompt.Dx())
-	entry := image.Rect(c-w/2, text.Max.Y+gapInForm*s, c+w/2, l.prompt.Max.Y)
-	cv.RoundedBorder(rect(entry), render.UniformCorners(entryHeight*s/4), render.UniformInsets(max(s, 1)), r.theme.Accent)
+	cv.RoundedBorder(rect(l.entry()), render.UniformCorners(entryHeight*s/4), render.UniformInsets(max(s, 1)), r.theme.Accent)
+}
+
+func (r *Renderer) shown(cv *render.Canvas, l layout, p Prompt) {
 	if p.Shown == "" {
 		return
 	}
-	inner := entry.Inset(entryHeight * s / 4)
+	s := l.scale
+	px := float64(textSize * s)
+	inner := l.entryInner()
 	prev := cv.PushClip(rect(inner))
 	if p.Kind == PasswordPrompt {
 		px = float64(bulletSize * s)

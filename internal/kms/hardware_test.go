@@ -33,7 +33,7 @@ func awaitFlip(t *testing.T, d *Display, o *Output) {
 	for o.flipping {
 		select {
 		case e := <-d.Events():
-			if err := d.Handle(e); err != nil {
+			if _, err := d.Handle(e); err != nil {
 				t.Fatal(err)
 			}
 		case <-deadline:
@@ -70,14 +70,14 @@ func TestRealCardFlipsDeactivatesAndRetains(t *testing.T) {
 		o := d.Outputs()[0]
 		f := o.Frame()
 		fill(f, image.Rectangle{Max: f.Size}, 0x40)
-		if err := o.Present(image.Rectangle{Max: f.Size}); err != nil {
+		if err := o.Present(DamageOf(image.Rectangle{Max: f.Size})); err != nil {
 			t.Fatal(err)
 		}
 		awaitFlip(t, d, o)
 		for i := range 3 {
 			r := image.Rect(10*i, 10, 10*i+8, 18)
 			fill(f, r, 0xff)
-			if err := o.Present(r); err != nil {
+			if err := o.Present(DamageOf(r)); err != nil {
 				t.Fatal(err)
 			}
 			awaitFlip(t, d, o)

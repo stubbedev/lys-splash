@@ -39,10 +39,14 @@ func newScreen(size image.Point) *fakeScreen {
 func (s *fakeScreen) Frame() kms.Frame { return s.frame }
 func (s *fakeScreen) Scale() int       { return 1 }
 
-func (s *fakeScreen) Present(r image.Rectangle) error {
+func (s *fakeScreen) Present(d kms.Damage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.presents = append(s.presents, r)
+	var bounds image.Rectangle
+	for _, r := range d.Rects() {
+		bounds = bounds.Union(r)
+	}
+	s.presents = append(s.presents, bounds)
 	return nil
 }
 

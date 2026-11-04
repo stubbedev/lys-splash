@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -33,7 +32,7 @@ const FrameInterval = time.Second / 30
 type Screen interface {
 	Frame() kms.Frame
 	Scale() int
-	Present(damage image.Rectangle) error
+	Present(damage kms.Damage) error
 }
 
 // Display is every graphical output; with no Screens the splash is text on

@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"golang.org/x/image/bmp"
 
 	"github.com/stubbedev/lys-splash/internal/kms"
+	"github.com/stubbedev/lys-splash/internal/protocol"
 )
 
 func TestDefaultParses(t *testing.T) {
@@ -171,7 +173,15 @@ func frame(size image.Point) kms.Frame {
 	return kms.Frame{Pix: make([]byte, size.X*size.Y*4), Stride: size.X * 4, Size: size}
 }
 
-func draw(t *testing.T, r *Renderer, f kms.Frame, scale int, prev *State, cur State) image.Rectangle {
+func bounds(d kms.Damage) image.Rectangle {
+	var b image.Rectangle
+	for _, r := range d.Rects() {
+		b = b.Union(r)
+	}
+	return b
+}
+
+func draw(t *testing.T, r *Renderer, f kms.Frame, scale int, prev *State, cur State) kms.Damage {
 	t.Helper()
 	d, err := r.Draw(f, scale, prev, cur)
 	if err != nil {
@@ -224,7 +234,7 @@ func TestGoldenFrames(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			f := frame(tc.size)
-			if d := draw(t, renderer(t, tc.theme, tc.bgrt), f, tc.scale, nil, tc.state); d != (image.Rectangle{Max: tc.size}) {
+			if d := bounds(draw(t, renderer(t, tc.theme, tc.bgrt), f, tc.scale, nil, tc.state)); d != (image.Rectangle{Max: tc.size}) {
 				t.Errorf("a first frame damaged %v, want all of it", d)
 			}
 			check(t, tc.name, f)
@@ -250,7 +260,7 @@ func TestHiddenBlanksAndShowsAgain(t *testing.T) {
 	shown := State{Message: "hi"}
 	draw(t, r, f, 1, nil, shown)
 	hidden := State{Hidden: true, Message: "hi"}
-	if d := draw(t, r, f, 1, &shown, hidden); d != (image.Rectangle{Max: size}) {
+	if d := bounds(draw(t, r, f, 1, &shown, hidden)); d != (image.Rectangle{Max: size}) {
 		t.Errorf("hiding damaged %v", d)
 	}
 	if !bytes.Equal(f.Pix, bytes.Repeat([]byte{0, 0, 0, 0xff}, size.X*size.Y)) {
@@ -277,7 +287,7 @@ func TestThrobberDamageCoversOnlyTheThrobber(t *testing.T) {
 	before := bytes.Clone(f.Pix)
 	next := prev
 	next.Phase = 1
-	d := draw(t, r, f, 1, &prev, next)
+	d := bounds(draw(t, r, f, 1, &prev, next))
 	l := r.layout(size, 1)
 	if d != l.throb {
 		t.Fatalf("a throbber step damaged %v, want the throbber's %v", d, l.throb)
@@ -321,6 +331,26 @@ func TestEveryPartialRedrawMatchesAFullOne(t *testing.T) {
 		{Phase: 7, Booting: true, Progress: 40},
 		{Phase: 7, Booting: true, Progress: 40, Updating: true},
 		{Phase: 8, Booting: true, Progress: 60},
+		{Phase: 8, Message: "a"},
+		{Phase: 8, Message: "a much longer message with fjgyQ overhanging glyphs"},
+		{Phase: 8, Message: "jjj"},
+		{Phase: 8, Message: strings.Repeat("far too long for the box ", 20)},
+		{Phase: 8, Message: "short"},
+		{Phase: 8, Prompt: Prompt{Kind: QuestionPrompt, Text: "Go on?", Shown: "y"}},
+		{Phase: 8, Prompt: Prompt{Kind: QuestionPrompt, Text: "Go on?", Shown: "yes"}},
+		{Phase: 8, Prompt: Prompt{Kind: PasswordPrompt, Text: "Go on?", Shown: "•••"}},
+		{Phase: 8, Prompt: Prompt{Kind: PasswordPrompt, Text: "Passphrase for /dev/sda2:", Shown: "•••"}},
+		{Phase: 8, Prompt: Prompt{Kind: PasswordPrompt, Text: "Passphrase for /dev/sda2:", Shown: strings.Repeat("•", 80)}},
+		{Phase: 8, Prompt: Prompt{Kind: PasswordPrompt, Text: "x"}},
+		{Phase: 8},
+		{Updating: true, Progress: 0},
+		{Updating: true, Progress: 1},
+		{Updating: true, Progress: 2},
+		{Updating: true, Progress: 3},
+		{Updating: true, Progress: 7},
+		{Updating: true, Progress: 3},
+		{Updating: true, Progress: 100},
+		{Updating: true, Progress: 0},
 	}
 	f := frame(size)
 	var prev *State
@@ -345,8 +375,8 @@ func TestBootProgressDamagesOnlyItsBar(t *testing.T) {
 	next := prev
 	next.Progress = 11
 	l := r.layout(size, 1)
-	if d := draw(t, r, f, 1, &prev, next); d != l.boot {
-		t.Errorf("a boot progress step damaged %v, want the bar's %v", d, l.boot)
+	if d := bounds(draw(t, r, f, 1, &prev, next)); d.Empty() || !d.In(l.boot) {
+		t.Errorf("a boot progress step damaged %v, want part of the bar's %v", d, l.boot)
 	}
 	if l.boot.Overlaps(l.busy) || l.boot.Overlaps(l.message) {
 		t.Errorf("the boot progress bar %v overlaps the throbber %v or the message %v", l.boot, l.busy, l.message)
@@ -454,4 +484,101 @@ func TestPhasesToNextPictureLandOnTheNextPicture(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestBarMovesMatchAFullRedraw(t *testing.T) {
+	t.Parallel()
+	size := image.Pt(800, 600)
+	r := renderer(t, Default(), nil)
+	full := renderer(t, Default(), nil)
+	for _, scale := range []int{1, 2} {
+		for _, booting := range []bool{true, false} {
+			f := frame(size)
+			at := func(p protocol.Percent) State {
+				return State{Booting: booting, Updating: !booting, Progress: p}
+			}
+			prev := at(0)
+			draw(t, r, f, scale, nil, prev)
+			for _, p := range []protocol.Percent{1, 2, 3, 4, 5, 6, 20, 21, 99, 100, 97, 1, 0, 50, 49} {
+				cur := at(p)
+				draw(t, r, f, scale, &prev, cur)
+				fresh := frame(size)
+				draw(t, full, fresh, scale, nil, cur)
+				if !bytes.Equal(fresh.Pix, f.Pix) {
+					t.Errorf("scale %d, booting %v, %d%% to %d%% differs from a full redraw", scale, booting, prev.Progress, p)
+				}
+				prev = cur
+			}
+		}
+	}
+}
+
+func damagedArea(d kms.Damage) int {
+	total := 0
+	for _, r := range d.Rects() {
+		total += r.Dx() * r.Dy()
+	}
+	return total
+}
+
+func TestDamageIsOnlyWhatChanged(t *testing.T) {
+	t.Parallel()
+	const scale = 1
+	size := image.Pt(1920, 1080)
+	th := Default()
+	th.Throbber = Dots
+	r := renderer(t, th, nil)
+	l := r.layout(size, scale)
+	dot := l.dotSize() * l.dotSize()
+	barArea := func(track image.Rectangle) int { return track.Dx() * track.Dy() }
+	prompt := func(shown string) State {
+		return State{Prompt: Prompt{Kind: PasswordPrompt, Text: "Disk:", Shown: shown}}
+	}
+	tests := []struct {
+		name     string
+		from, to State
+		rects    int
+		within   image.Rectangle
+		most     int
+	}{
+		{"a dots step is the two dots that swap", State{Phase: 0}, State{Phase: 12}, 2, l.throb, 2 * dot},
+		{"a key typed is the entry's inside", prompt("•"), prompt("••"), 1, l.entryInner(), area(l.entryInner())},
+		{"a short message is its text", State{}, State{Message: "Starting"}, 1, l.message, 150 * l.message.Dy()},
+		{"the prompt's text is its extent", prompt("•"), State{Prompt: Prompt{Kind: PasswordPrompt, Text: "Disk two:", Shown: "•"}}, 1, l.promptLine(), 150 * l.promptLine().Dy()},
+		{"a percent of boot is its columns", State{Booting: true, Progress: 50}, State{Booting: true, Progress: 51}, 1, l.boot, barArea(l.boot) / 10},
+		{"a percent of update is its columns", State{Updating: true, Progress: 50}, State{Updating: true, Progress: 51}, 1, l.updateBar(), barArea(l.updateBar()) / 10},
+		{"a message and a boot step stay apart", State{Booting: true, Progress: 50}, State{Booting: true, Progress: 51, Message: "m"}, 2, l.busy.Union(l.message).Union(l.boot), barArea(l.boot)/10 + 50*l.message.Dy()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := renderer(t, th, nil)
+			f := frame(size)
+			draw(t, r, f, scale, nil, tc.from)
+			before := bytes.Clone(f.Pix)
+			d := draw(t, r, f, scale, &tc.from, tc.to)
+			if got := len(d.Rects()); got != tc.rects {
+				t.Errorf("%d rectangles %v, want %d", got, d.Rects(), tc.rects)
+			}
+			if !bounds(d).In(tc.within) {
+				t.Errorf("damage %v outside %v", d.Rects(), tc.within)
+			}
+			if got := damagedArea(d); got > tc.most {
+				t.Errorf("%d pixels damaged, want at most %d", got, tc.most)
+			}
+			t.Logf("%s: %d pixels in %v", tc.name, damagedArea(d), d.Rects())
+			for y := range size.Y {
+				for x := range size.X {
+					i := y*f.Stride + x*4
+					if !bytes.Equal(f.Pix[i:i+4], before[i:i+4]) && !slices.ContainsFunc(d.Rects(), image.Pt(x, y).In) {
+						t.Fatalf("pixel (%d,%d) changed outside the damage %v", x, y, d.Rects())
+					}
+				}
+			}
+		})
+	}
+}
+
+func area(r image.Rectangle) int {
+	return r.Dx() * r.Dy()
 }
