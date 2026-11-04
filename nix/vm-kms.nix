@@ -3,10 +3,7 @@
   splash,
   kms,
 }: let
-  grab = pkgs.runCommandCC "drm-grab" {
-    nativeBuildInputs = [pkgs.pkg-config];
-    buildInputs = [pkgs.libdrm];
-  } "mkdir -p $out/bin && $CC -std=gnu11 -O2 -Wall -Wextra -Werror -o $out/bin/drm-grab ${./drm-grab.c} $(pkg-config --cflags --libs libdrm)";
+  grab = pkgs.callPackage ./drm-grab.nix {};
 in
   pkgs.testers.runNixOSTest {
     name = "lys-splash-kms";

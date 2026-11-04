@@ -69,6 +69,12 @@
         inherit wmPackage;
         splash = vmSplash;
       };
+      vm-greeter-outputs = import ./vm-greeter-outputs.nix {
+        inherit pkgs;
+        inherit (inputs) lys-login lys-wm;
+        inherit wmPackage;
+        splash = vmSplash;
+      };
       # The daemon end to end on a virtio-gpu VM: it lights the output and
       # takes tty1, the plymouth client and systemd's password agent talk
       # to it, a password typed on the VM's keyboard comes back, and quit

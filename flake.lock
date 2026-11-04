@@ -75,9 +75,6 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
-          "lys-wm",
-          "lys-shell",
-          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -109,6 +106,7 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
+          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -140,9 +138,6 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
-          "lys-wm",
-          "lys-shell",
-          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -176,6 +171,7 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
+          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -209,9 +205,6 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
-          "lys-wm",
-          "lys-shell",
-          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -247,6 +240,7 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
+          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -282,9 +276,6 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
-          "lys-wm",
-          "lys-shell",
-          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -322,6 +313,7 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
+          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -341,6 +333,43 @@
       }
     },
     "home-manager_18": {
+      "inputs": {
+        "nixpkgs": [
+          "lys-wm",
+          "lys-shell",
+          "lys-wm",
+          "lys-shell",
+          "lys-wm",
+          "lys-shell",
+          "lys-wm",
+          "lys-shell",
+          "lys-wm",
+          "lys-shell",
+          "lys-wm",
+          "lys-shell",
+          "lys-wm",
+          "lys-shell",
+          "lys-wm",
+          "lys-shell",
+          "lys-secrets",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1793193205,
+        "narHash": "sha256-X6xa6sGA7RnJQuZGbFMC+K+KToWAlBDCCjJXfTwEPsw=",
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "rev": "095fef2f265c3c0da4fe315efba8f8a04495ab34",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "type": "github"
+      }
+    },
+    "home-manager_19": {
       "inputs": {
         "nixpkgs": [
           "lys-wm",
@@ -382,19 +411,18 @@
     "home-manager_2": {
       "inputs": {
         "nixpkgs": [
-          "lys-wm",
-          "lys-shell",
           "lys-login",
-          "lys-secrets",
+          "lys-shell",
+          "lys-settings",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1793193205,
-        "narHash": "sha256-X6xa6sGA7RnJQuZGbFMC+K+KToWAlBDCCjJXfTwEPsw=",
+        "lastModified": 1793757180,
+        "narHash": "sha256-gyV7AtCwLnOImcrfSETP4J3Ie96bz19DY47B7m7Y3HM=",
         "owner": "nix-community",
         "repo": "home-manager",
-        "rev": "095fef2f265c3c0da4fe315efba8f8a04495ab34",
+        "rev": "b787c48e2ec57a9d098f5c2721882a3bc1e16f97",
         "type": "github"
       },
       "original": {
@@ -408,6 +436,7 @@
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
+          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -431,9 +460,6 @@
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
-          "lys-wm",
-          "lys-shell",
-          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -459,6 +485,7 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
+          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -484,9 +511,6 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
-          "lys-wm",
-          "lys-shell",
-          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -514,6 +538,7 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
+          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -541,9 +566,6 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
-          "lys-wm",
-          "lys-shell",
-          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -573,6 +595,7 @@
           "lys-shell",
           "lys-wm",
           "lys-shell",
+          "lys-login",
           "lys-secrets",
           "nixpkgs"
         ]
@@ -816,11 +839,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1793658145,
-        "narHash": "sha256-k5PLtB3TQebXOGKssDTO0Skgf8r5uNT6ujAxa4T75tc=",
+        "lastModified": 1793787242,
+        "narHash": "sha256-B3aJ243xRe8/GNNId457Je5mSSHenI07ylxh+r0bQbE=",
         "owner": "stubbedev",
         "repo": "lys-lib",
-        "rev": "4bc74fcb194b87e1ad13d5cf19d13c88cd219696",
+        "rev": "d6cb784973e15b43bf1d4e5a9f02a857489eb256",
         "type": "github"
       },
       "original": {
@@ -1685,11 +1708,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1793665774,
-        "narHash": "sha256-ih8HRQOsIF81TR71h/J8JbZoiqxyQA+FDlV59AWSUnE=",
+        "lastModified": 1793808975,
+        "narHash": "sha256-F7CHkg14qkfyK8Bm9hkekrdoC6s5FpSmKBSY7YboX1Q=",
         "owner": "stubbedev",
         "repo": "lys-login",
-        "rev": "2b97d96a475170cc87b25ff22af892e0dfd580ad",
+        "rev": "5e1b7407ab144047a1539f8bb80bfac1dfff6677",
         "type": "github"
       },
       "original": {
@@ -2332,11 +2355,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1793658219,
-        "narHash": "sha256-Pv+Ch/78xUjgioXkj8PtnmFmjTc0Tkd3digcS0uV7Zo=",
+        "lastModified": 1793788511,
+        "narHash": "sha256-HWGUwF8DfpUQQsAd17XtuyKuqPvtx4plZtiszJ7quKo=",
         "owner": "stubbedev",
         "repo": "lys-secrets",
-        "rev": "216ed3898f8230464d987157e7fb4d46cfe6607f",
+        "rev": "574996259b3cc3c95e9d933c5aad6a031ed0f38f",
         "type": "github"
       },
       "original": {
@@ -2361,7 +2384,7 @@
           "lys-login",
           "flake-parts"
         ],
-        "home-manager": "home-manager_10",
+        "home-manager": "home-manager_11",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2406,7 +2429,7 @@
           "lys-shell",
           "flake-parts"
         ],
-        "home-manager": "home-manager_11",
+        "home-manager": "home-manager_12",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2453,7 +2476,7 @@
           "lys-login",
           "flake-parts"
         ],
-        "home-manager": "home-manager_12",
+        "home-manager": "home-manager_13",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2502,7 +2525,7 @@
           "lys-shell",
           "flake-parts"
         ],
-        "home-manager": "home-manager_13",
+        "home-manager": "home-manager_14",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2553,7 +2576,7 @@
           "lys-login",
           "flake-parts"
         ],
-        "home-manager": "home-manager_14",
+        "home-manager": "home-manager_15",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2606,7 +2629,7 @@
           "lys-shell",
           "flake-parts"
         ],
-        "home-manager": "home-manager_15",
+        "home-manager": "home-manager_16",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2661,7 +2684,7 @@
           "lys-login",
           "flake-parts"
         ],
-        "home-manager": "home-manager_16",
+        "home-manager": "home-manager_17",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2718,7 +2741,7 @@
           "lys-shell",
           "flake-parts"
         ],
-        "home-manager": "home-manager_17",
+        "home-manager": "home-manager_18",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2776,7 +2799,7 @@
           "lys-shell",
           "flake-parts"
         ],
-        "home-manager": "home-manager_18",
+        "home-manager": "home-manager_19",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2821,7 +2844,7 @@
           "lys-login",
           "flake-parts"
         ],
-        "home-manager": "home-manager_2",
+        "home-manager": "home-manager_3",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2850,7 +2873,7 @@
           "lys-shell",
           "flake-parts"
         ],
-        "home-manager": "home-manager_3",
+        "home-manager": "home-manager_4",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2881,7 +2904,7 @@
           "lys-login",
           "flake-parts"
         ],
-        "home-manager": "home-manager_4",
+        "home-manager": "home-manager_5",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2914,7 +2937,7 @@
           "lys-shell",
           "flake-parts"
         ],
-        "home-manager": "home-manager_5",
+        "home-manager": "home-manager_6",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2949,7 +2972,7 @@
           "lys-login",
           "flake-parts"
         ],
-        "home-manager": "home-manager_6",
+        "home-manager": "home-manager_7",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -2986,7 +3009,7 @@
           "lys-shell",
           "flake-parts"
         ],
-        "home-manager": "home-manager_7",
+        "home-manager": "home-manager_8",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -3025,7 +3048,7 @@
           "lys-login",
           "flake-parts"
         ],
-        "home-manager": "home-manager_8",
+        "home-manager": "home-manager_9",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -3066,7 +3089,7 @@
           "lys-shell",
           "flake-parts"
         ],
-        "home-manager": "home-manager_9",
+        "home-manager": "home-manager_10",
         "nixpkgs": [
           "lys-wm",
           "lys-shell",
@@ -3093,6 +3116,44 @@
         "type": "github"
       }
     },
+    "lys-settings": {
+      "inputs": {
+        "flake-parts": [
+          "lys-login",
+          "lys-shell",
+          "flake-parts"
+        ],
+        "home-manager": "home-manager_2",
+        "lys-ci": [
+          "lys-login",
+          "lys-shell",
+          "lys-ci"
+        ],
+        "lys-wm": [
+          "lys-login",
+          "lys-shell",
+          "lys-wm"
+        ],
+        "nixpkgs": [
+          "lys-login",
+          "lys-shell",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1793784029,
+        "narHash": "sha256-qPtrfaCIowSQ75y1xgTta8+X1GuYHVDjAoudVabqXsk=",
+        "owner": "stubbedev",
+        "repo": "lys-settings",
+        "rev": "1a346ea4ff19dde62d3f33fcee82ba6b60474581",
+        "type": "github"
+      },
+      "original": {
+        "owner": "stubbedev",
+        "repo": "lys-settings",
+        "type": "github"
+      }
+    },
     "lys-shell": {
       "inputs": {
         "flake-parts": [
@@ -3108,6 +3169,7 @@
           "lys-login",
           "lys-secrets"
         ],
+        "lys-settings": "lys-settings",
         "lys-wm": [
           "lys-login",
           "lys-wm"
@@ -3118,11 +3180,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1793665688,
-        "narHash": "sha256-I7sXoRn/zRwO0Q7qcLEchqFSfU1hAG0qgKWAiQNaj78=",
+        "lastModified": 1793808613,
+        "narHash": "sha256-R6MFaKTOZXAYYaCfex9RRxYIyOepHn1YxW82/SdxP/0=",
         "owner": "stubbedev",
         "repo": "lys-shell",
-        "rev": "8d4d4a818cb58076168addad720bcbaad98c6ce5",
+        "rev": "6046d4d79b138950aceaffd6f386ae6469a7dcf5",
         "type": "github"
       },
       "original": {
