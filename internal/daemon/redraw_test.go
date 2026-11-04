@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"image"
 	"log/slog"
 	"sync"
@@ -43,7 +44,7 @@ func newQuietDaemon(t *testing.T, th theme.Theme) (*daemon, *quietScreen) {
 		cfg:      Config{Clock: SystemClock{}, Log: slog.New(slog.DiscardHandler)},
 		display:  &fakeDisplay{screens: []Screen{s}},
 		renderer: r,
-		drawn:    map[Screen]theme.State{},
+		drawn:    map[Screen]drawnScreen{},
 	}
 	if err := d.redraw(); err != nil {
 		t.Fatal(err)
@@ -105,7 +106,7 @@ func TestAFlipDrawsNothing(t *testing.T) {
 		cfg:      Config{Clock: SystemClock{}, Log: slog.New(slog.DiscardHandler)},
 		display:  display,
 		renderer: r,
-		drawn:    map[Screen]theme.State{},
+		drawn:    map[Screen]drawnScreen{},
 		inbox:    make(chan event, 1),
 		done:     make(chan struct{}),
 		paused:   true,
@@ -212,7 +213,7 @@ func TestTheLoopWakesOnlyForAPictureThatChanges(t *testing.T) {
 				cfg:      Config{Clock: clock, Log: slog.New(slog.DiscardHandler)},
 				display:  &fakeDisplay{screens: []Screen{s}},
 				renderer: r,
-				drawn:    map[Screen]theme.State{},
+				drawn:    map[Screen]drawnScreen{},
 				inbox:    make(chan event, 1),
 				done:     make(chan struct{}),
 				timer:    clock,
@@ -245,5 +246,115 @@ func TestTheLoopWakesOnlyForAPictureThatChanges(t *testing.T) {
 				t.Errorf("%d presents for %d wakes: a wake without a new picture is wasted", got, wakes)
 			}
 		})
+	}
+}
+
+type failingScreen struct {
+	quietScreen
+	err error
+}
+
+func (s *failingScreen) Present(kms.Damage) error {
+	s.presents++
+	return s.err
+}
+
+type countingHandler struct {
+	slog.Handler
+	records *atomic.Int32
+}
+
+func (countingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h countingHandler) Handle(context.Context, slog.Record) error {
+	h.records.Add(1)
+	return nil
+}
+
+func TestAFailingScreenBacksOffAndLogsOnce(t *testing.T) {
+	for name, paused := range map[string]bool{"animating": false, "still": true} {
+		t.Run(name, func(t *testing.T) {
+			th := theme.Default()
+			clock := newFakeClock()
+			r, err := theme.NewRenderer(th, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			size := image.Pt(320, 240)
+			s := &failingScreen{err: errors.New("commit refused")}
+			s.frame = kms.Frame{Pix: make([]byte, size.X*size.Y*kms.BytesPerPixel), Stride: size.X * kms.BytesPerPixel, Size: size}
+			var records atomic.Int32
+			d := &daemon{
+				cfg:      Config{Clock: clock, Log: slog.New(countingHandler{slog.DiscardHandler, &records})},
+				display:  &fakeDisplay{screens: []Screen{s}},
+				renderer: r,
+				drawn:    map[Screen]drawnScreen{},
+				inbox:    make(chan event, 1),
+				done:     make(chan struct{}),
+				timer:    clock,
+				started:  clock.Now(),
+				paused:   paused,
+			}
+			d.stale = true
+			ctx, cancel := context.WithCancel(t.Context())
+			done := make(chan error, 1)
+			go func() { done <- d.loop(ctx) }()
+			d.post(event{previous: &previousBoot{err: errors.New("first event")}})
+			const minute = time.Minute
+			for elapsed := time.Duration(0); elapsed < minute; {
+				elapsed += clock.fire(t)
+			}
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the loop did not stop")
+			}
+			if got := records.Load(); got != 2 {
+				t.Errorf("%d log records in a minute of failing commits, want the failure once beside the first event", got)
+			}
+			wantAtMost := 7 + int(minute/lastPresentRetry)
+			if s.presents > wantAtMost || s.presents < int(minute/lastPresentRetry) {
+				t.Errorf("%d commits tried in a minute, want about one per %v and at most %d", s.presents, lastPresentRetry, wantAtMost)
+			}
+		})
+	}
+}
+
+func TestAFrameBackOffEndsWhenAPresentSucceeds(t *testing.T) {
+	d, s := newQuietDaemon(t, theme.Default())
+	failing := &failingScreen{err: errors.New("commit refused")}
+	failing.frame = s.frame
+	clock := newFakeClock()
+	d.cfg.Clock = clock
+	d.display = &fakeDisplay{screens: []Screen{failing}}
+	if err := d.redraw(); err == nil {
+		t.Fatal("the first failure was not reported")
+	}
+	first := failing.presents
+	if d.retryAt.IsZero() {
+		t.Fatal("a failing screen has no retry")
+	}
+	if err := d.redraw(); err != nil || failing.presents != first {
+		t.Errorf("before its retry: %v, %d presents after %d", err, failing.presents, first)
+	}
+	clock.mu.Lock()
+	clock.now = d.retryAt
+	clock.mu.Unlock()
+	if err := d.redraw(); err != nil || failing.presents != first+1 {
+		t.Errorf("a repeated failure: %v, %d presents after %d", err, failing.presents, first)
+	}
+	clock.mu.Lock()
+	clock.now = d.retryAt
+	clock.mu.Unlock()
+	failing.err = nil
+	if err := d.redraw(); err != nil || failing.presents != first+2 {
+		t.Errorf("the retry that works: %v, %d presents after %d", err, failing.presents, first)
+	}
+	if !d.retryAt.IsZero() {
+		t.Error("a screen that works still has a retry")
+	}
+	if err := d.redraw(); err != nil || failing.presents != first+2 {
+		t.Errorf("an unchanged state after recovering: %v, %d presents", err, failing.presents)
 	}
 }

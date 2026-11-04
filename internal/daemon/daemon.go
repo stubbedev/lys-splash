@@ -28,6 +28,14 @@ import (
 // FrameInterval is how long one of the throbber's phases lasts.
 const FrameInterval = time.Second / 30
 
+// A screen whose frame fails to reach the display is tried again after a wait
+// that doubles from the first to the last, so a lost master or a broken driver
+// costs neither a commit per frame nor a log record per frame.
+const (
+	firstPresentRetry = 50 * time.Millisecond
+	lastPresentRetry  = 2 * time.Second
+)
+
 // Screen is one output the splash draws on.
 type Screen interface {
 	Frame() kms.Frame
@@ -151,6 +159,14 @@ type themeLoad struct {
 	err      error
 }
 
+// drawnScreen is what a screen shows and how its failing frames are retried: a
+// zero wait means its last frame reached the display.
+type drawnScreen struct {
+	state   theme.State
+	wait    time.Duration
+	retryAt time.Time
+}
+
 type event struct {
 	call     *server.Call
 	hangup   *server.Conn
@@ -172,7 +188,7 @@ type daemon struct {
 	units    bool
 	state    theme.State
 	screens  []Screen
-	drawn    map[Screen]theme.State
+	drawn    map[Screen]drawnScreen
 	settled  theme.State
 	stale    bool
 	shown    *theme.State
@@ -192,10 +208,12 @@ type daemon struct {
 	reloads   []*server.Call
 	reloading bool
 	// The timer is armed for the next change of the picture, counted from
-	// phaseAt, the start of the phase showing; ticking says the animation is
-	// running and rearm that the deadline has to be worked out again.
+	// phaseAt, the start of the phase showing, or for retryAt, the first retry
+	// of a failing screen. ticking says the animation is running and rearm that
+	// the deadline has to be worked out again.
 	timer   Timer
 	phaseAt time.Time
+	retryAt time.Time
 	ticking bool
 	rearm   bool
 }
@@ -218,7 +236,7 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, dev D
 		bgrt:     bgrt,
 		renderer: r,
 		units:    t.Units,
-		drawn:    map[Screen]theme.State{},
+		drawn:    map[Screen]drawnScreen{},
 		inbox:    make(chan event, 16),
 		done:     make(chan struct{}),
 		state:    theme.State{Updating: cfg.Mode == Updates},
@@ -278,19 +296,23 @@ func (d *daemon) previousLoaded(p *previousBoot) {
 	}
 }
 
-// tick is the channel of the next change of the animation, nil while nothing
-// animates: the timer only ever wakes the loop for a picture that differs.
+// tick is the channel of the next change of the animation or retry of a failing
+// screen, nil with neither: the timer only ever wakes the loop for a picture
+// that differs or a frame still to show.
 func (d *daemon) tick() <-chan time.Time {
-	if !d.animating() {
-		if d.ticking {
+	animating := d.animating()
+	if animating != d.ticking {
+		d.ticking, d.rearm = animating, true
+		if animating {
+			d.phaseAt = d.cfg.Clock.Now()
+		}
+	}
+	if !animating && d.retryAt.IsZero() {
+		if d.rearm {
+			d.rearm = false
 			d.timer.Stop()
-			d.ticking = false
 		}
 		return nil
-	}
-	if !d.ticking {
-		d.ticking, d.rearm = true, true
-		d.phaseAt = d.cfg.Clock.Now()
 	}
 	if d.rearm {
 		d.rearm = false
@@ -300,24 +322,39 @@ func (d *daemon) tick() <-chan time.Time {
 }
 
 func (d *daemon) untilNextChange() time.Duration {
-	next := d.phaseAt.Add(time.Duration(d.renderer.PhasesToNextPicture(d.state.Phase)) * FrameInterval)
-	if d.previous > 0 && d.state.Progress < protocol.MaxPercent-1 {
-		if at := d.started.Add(nextPercentAt(d.state.Progress, d.previous)); at.Before(next) {
-			next = at
+	next := d.retryAt
+	if d.ticking {
+		next = earliest(next, d.phaseAt.Add(time.Duration(d.renderer.PhasesToNextPicture(d.state.Phase))*FrameInterval))
+		if d.previous > 0 && d.state.Progress < protocol.MaxPercent-1 {
+			next = earliest(next, d.started.Add(nextPercentAt(d.state.Progress, d.previous)))
 		}
 	}
 	return max(next.Sub(d.cfg.Clock.Now()), 0)
 }
 
+// earliest is the sooner of a and b, a being zero when there is none.
+func earliest(a, b time.Time) time.Time {
+	if a.IsZero() || b.Before(a) {
+		return b
+	}
+	return a
+}
+
 func (d *daemon) step() {
 	now := d.cfg.Clock.Now()
+	d.rearm = true
+	if !d.retryAt.IsZero() && !now.Before(d.retryAt) {
+		d.stale = true
+	}
+	if !d.ticking {
+		return
+	}
 	phases := now.Sub(d.phaseAt) / FrameInterval
 	d.state.Phase = (d.state.Phase + int(phases%theme.Frames)) % theme.Frames
 	d.phaseAt = d.phaseAt.Add(phases * FrameInterval)
 	if d.previous > 0 {
 		d.state.Progress = bootProgress(now.Sub(d.started), d.previous)
 	}
-	d.rearm = true
 }
 
 func (d *daemon) loop(ctx context.Context) error {
@@ -351,6 +388,11 @@ func (d *daemon) loop(ctx context.Context) error {
 			var changed bool
 			changed, err = d.display.Handle(e)
 			d.stale = d.stale || changed
+			var flip *kms.FlipError
+			if errors.As(err, &flip) {
+				d.presentFailed(flip.Output, d.drawn[flip.Output])
+				d.nextRetry()
+			}
 		case <-d.tick():
 			d.step()
 		}
@@ -655,12 +697,16 @@ func (d *daemon) redraw() error {
 			errs = append(errs, err)
 		}
 	}
+	d.nextRetry()
 	return errors.Join(errs...)
 }
 
 func (d *daemon) drawScreen(s Screen) error {
-	prev, known := d.drawn[s]
-	from := &prev
+	shown, known := d.drawn[s]
+	if shown.wait > 0 && d.cfg.Clock.Now().Before(shown.retryAt) {
+		return nil
+	}
+	from := &shown.state
 	if !known {
 		from = nil
 	}
@@ -669,11 +715,43 @@ func (d *daemon) drawScreen(s Screen) error {
 		d.stale = true
 		return err
 	}
-	d.drawn[s] = d.state
-	if known && damage.Empty() {
+	shown.state = d.state
+	if known && shown.wait == 0 && damage.Empty() {
+		d.drawn[s] = shown
 		return nil
 	}
-	return s.Present(damage)
+	err = s.Present(damage)
+	if err == nil {
+		shown.wait = 0
+		d.drawn[s] = shown
+		return nil
+	}
+	if d.presentFailed(s, shown) {
+		return err
+	}
+	return nil
+}
+
+// presentFailed puts off s's next frame and says whether this failure is news:
+// only the first of a run of them is worth a log record.
+func (d *daemon) presentFailed(s Screen, shown drawnScreen) bool {
+	first := shown.wait == 0
+	shown.wait = min(max(2*shown.wait, firstPresentRetry), lastPresentRetry)
+	shown.retryAt = d.cfg.Clock.Now().Add(shown.wait)
+	d.drawn[s] = shown
+	return first
+}
+
+func (d *daemon) nextRetry() {
+	var next time.Time
+	for _, s := range d.screens {
+		if shown := d.drawn[s]; shown.wait > 0 {
+			next = earliest(next, shown.retryAt)
+		}
+	}
+	if !next.Equal(d.retryAt) {
+		d.retryAt, d.rearm = next, true
+	}
 }
 
 func (d *daemon) redrawText() error {

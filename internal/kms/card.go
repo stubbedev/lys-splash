@@ -600,7 +600,7 @@ func (o *Output) flip() error {
 	b.stale = Damage{}
 	clips, err := o.damageClips()
 	if err != nil {
-		return err
+		return &FlipError{Output: o, Err: err}
 	}
 	if o.inherited && !o.committed {
 		o.request(b.fb, clips)
@@ -615,12 +615,27 @@ func (o *Output) flip() error {
 		flags |= drm.AtomicAllowModeset
 	}
 	if err := o.card.dev.Commit(&o.card.req, flags, uint64(o.crtc.id)); err != nil {
-		return fmt.Errorf("kms: %s: commit a frame to %s: %w", o.card.dev.Path(), o.name, err)
+		return &FlipError{Output: o, Err: fmt.Errorf("kms: %s: commit a frame to %s: %w", o.card.dev.Path(), o.name, err)}
 	}
 	o.committed, o.modeset, o.flipping, o.pending = true, false, true, false
 	o.damage = Damage{}
 	o.back = 1 - o.back
 	return nil
+}
+
+// FlipError is a frame of Output that did not reach the display. The output
+// keeps it, and its next Present sends it.
+type FlipError struct {
+	Output *Output
+	Err    error
+}
+
+func (e *FlipError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *FlipError) Unwrap() error {
+	return e.Err
 }
 
 // damageClips is the blob of the damage rectangles for this commit, kept for
