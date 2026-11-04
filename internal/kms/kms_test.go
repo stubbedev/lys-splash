@@ -1485,3 +1485,34 @@ func TestDamageKeepsRectanglesApartAndMergesOverlaps(t *testing.T) {
 		}
 	}
 }
+
+func TestNoFrameCanBeCommittedWhileMasterChanges(t *testing.T) {
+	t.Parallel()
+	d := newFakeDevice("/dev/dri/card0", 1)
+	d.connect(40, [2]uint32{531, 299}, mode(64, 32, true))
+	c := openFake(t, d, false, &Scaler{})
+	o := c.Outputs()[0]
+	if err := o.Present(DamageOf(image.Rectangle{Max: o.Frame().Size})); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flipped(drm.FlipEvent{UserData: 10}); err != nil {
+		t.Fatal(err)
+	}
+	during := 0
+	d.onMaster = func() {
+		before := len(d.real())
+		if err := o.Present(DamageOf(image.Rect(0, 0, 1, 1))); err != nil {
+			t.Error(err)
+		}
+		during += len(d.real()) - before
+	}
+	if err := c.Deactivate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Reactivate(); err != nil {
+		t.Fatal(err)
+	}
+	if during != 0 {
+		t.Errorf("%d frames could have been committed while master was changing", during)
+	}
+}

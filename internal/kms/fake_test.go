@@ -34,6 +34,7 @@ type fakeDevice struct {
 	mu          sync.Mutex
 	onConnector func()
 	onDumb      func()
+	onMaster    func()
 	path        string
 	propIDs     map[string]uint32
 	objects     map[uint32]map[string]uint64
@@ -164,6 +165,9 @@ func (d *fakeDevice) Close() error {
 func (d *fakeDevice) SetClientCap(uint64, uint64) error { return nil }
 
 func (d *fakeDevice) SetMaster() error {
+	if d.onMaster != nil {
+		d.onMaster()
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.masterTries++
@@ -175,6 +179,9 @@ func (d *fakeDevice) SetMaster() error {
 }
 
 func (d *fakeDevice) DropMaster() error {
+	if d.onMaster != nil {
+		d.onMaster()
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if !d.master {

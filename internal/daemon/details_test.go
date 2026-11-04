@@ -73,6 +73,7 @@ func (r *run) handled(t *testing.T) {
 
 func (r *run) state(t *testing.T) (deactivated, graphics bool, out string) {
 	t.Helper()
+	r.vtSettled(t)
 	r.display.mu.Lock()
 	deactivated = r.display.deactivated
 	r.display.mu.Unlock()

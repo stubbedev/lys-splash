@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -183,6 +185,26 @@ type run struct {
 	roots    chan string
 	duration string
 	console  *fakeConsole
+	d        *daemon
+}
+
+// vtSettled returns once what the loop has handled so far has reached the VT.
+func (r *run) vtSettled(t *testing.T) {
+	t.Helper()
+	r.call(t, protocol.Ping{}, protocol.Ack{})
+	if r.vt == nil {
+		return
+	}
+	reached := make(chan struct{})
+	r.d.vtq.do(func(Terminal) error {
+		close(reached)
+		return nil
+	})
+	select {
+	case <-reached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the VT queue did not get there in 5s")
+	}
 }
 
 func listen(t *testing.T, socket string) *server.Server {
@@ -254,10 +276,12 @@ func start(t *testing.T, s setup) *run {
 	if loadTheme == nil {
 		loadTheme = func(string) (theme.Theme, error) { return theme.Default(), nil }
 	}
-	cfg := Config{Mode: s.mode, Server: listen(t, r.socket), Chroot: chroot, BootDuration: r.duration, LoadBootDuration: load, SaveBootDuration: save, LoadTheme: loadTheme, Clock: SystemClock{}, Log: log}
+	started := make(chan *daemon, 1)
+	cfg := Config{started: func(d *daemon) { started <- d }, Mode: s.mode, Server: listen(t, r.socket), Chroot: chroot, BootDuration: r.duration, LoadBootDuration: load, SaveBootDuration: save, LoadTheme: loadTheme, Clock: SystemClock{}, Log: log}
 	go func() {
 		r.done <- Run(ctx, cfg, theme.Default(), nil, Devices{Display: r.display, VT: vt, Console: r.console})
 	}()
+	r.d = <-started
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -410,6 +434,7 @@ func TestMessageRedrawsOnlyItsLine(t *testing.T) {
 	if last := s.presents[len(s.presents)-1]; last.Dy() >= 240 || last.Empty() {
 		t.Errorf("the message presented %v, want its line only", last)
 	}
+	r.vtSettled(t)
 	r.vt.mu.Lock()
 	defer r.vt.mu.Unlock()
 	if !r.vt.graphics {
@@ -426,6 +451,7 @@ func TestTextFallback(t *testing.T) {
 	expect(t, c, protocol.Ack{})
 	r.typeKeys("pw\r")
 	expect(t, c, protocol.Answer{Data: []byte("pw")})
+	r.vtSettled(t)
 	r.vt.mu.Lock()
 	out := r.vt.out.String()
 	r.vt.mu.Unlock()
@@ -621,11 +647,13 @@ func TestTheVTIsReclaimedOnceTheRootIsWritableAndOnReactivate(t *testing.T) {
 	t.Parallel()
 	r := start(t, setup{screens: 1})
 	r.call(t, protocol.SystemInitialized{}, protocol.Ack{})
+	r.vtSettled(t)
 	if n, graphics := r.vt.reclaimed(); n != 1 || !graphics {
 		t.Errorf("after the root became writable the VT was reclaimed %d times, graphics %v; want once, in graphics", n, graphics)
 	}
 	r.call(t, protocol.Deactivate{}, protocol.Ack{})
 	r.call(t, protocol.Reactivate{}, protocol.Ack{})
+	r.vtSettled(t)
 	if n, graphics := r.vt.reclaimed(); n != 2 || !graphics {
 		t.Errorf("after reactivate the VT was reclaimed %d times, graphics %v; want twice, in graphics", n, graphics)
 	}
@@ -786,4 +814,98 @@ func TestReloadsDuringALoadShareTheNextOne(t *testing.T) {
 	if got := loads.Load(); got != 2 {
 		t.Errorf("%d loads for four reloads, want one running and one more for those that came during it", got)
 	}
+}
+
+type stoppedVT struct {
+	*fakeVT
+	entered chan struct{}
+	release chan struct{}
+	writes  atomic.Int32
+	onLoop  atomic.Int32
+	loop    atomic.Uint64
+}
+
+func goroutineID() uint64 {
+	buf := make([]byte, 64)
+	n := runtime.Stack(buf, false)
+	id, _, _ := strings.Cut(strings.TrimPrefix(string(buf[:n]), "goroutine "), " ")
+	v, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func (v *stoppedVT) Write(b []byte) (int, error) {
+	v.writes.Add(1)
+	if goroutineID() == v.loop.Load() {
+		v.onLoop.Add(1)
+	}
+	select {
+	case v.entered <- struct{}{}:
+	default:
+	}
+	<-v.release
+	return v.fakeVT.Write(b)
+}
+
+func TestAStoppedTerminalLeavesTheLoopRunning(t *testing.T) {
+	v := &stoppedVT{fakeVT: newVT(), entered: make(chan struct{}, 1), release: make(chan struct{})}
+	q := newVTQueue(v, slog.New(slog.DiscardHandler))
+	v.loop.Store(goroutineID())
+	if _, err := q.Write([]byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-v.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the queue never wrote")
+	}
+	chunk := make([]byte, 4096)
+	passes := 0
+	for range 2 * maxPendingVTBytes / len(chunk) {
+		if _, err := q.Write(chunk); err != nil {
+			t.Fatal(err)
+		}
+		passes++
+	}
+	q.do(Terminal.Graphics)
+	if want := 2 * maxPendingVTBytes / len(chunk); passes != want {
+		t.Errorf("%d loop passes during the stall, want %d", passes, want)
+	}
+	if got := v.onLoop.Load(); got != 0 {
+		t.Errorf("%d VT writes on the loop's goroutine", got)
+	}
+	if got := v.writes.Load(); got != 1 {
+		t.Errorf("%d writes reached the stopped terminal, want the one blocked", got)
+	}
+	q.mu.Lock()
+	pending := q.bytes
+	q.mu.Unlock()
+	if pending > maxPendingVTBytes {
+		t.Errorf("%d bytes queued past the bound of %d", pending, maxPendingVTBytes)
+	}
+	close(v.release)
+	q.drain(time.After(5 * time.Second))
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if !v.graphics {
+		t.Error("a mode change queued after dropped text was lost")
+	}
+	if !strings.HasPrefix(v.out.String(), "first") {
+		t.Errorf("the VT got %q first", v.out.String()[:min(16, v.out.Len())])
+	}
+}
+
+func TestAStoppedTerminalDoesNotHoldTheQuit(t *testing.T) {
+	v := &stoppedVT{fakeVT: newVT(), entered: make(chan struct{}, 1), release: make(chan struct{})}
+	defer close(v.release)
+	q := newVTQueue(v, slog.New(slog.DiscardHandler))
+	if _, err := q.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	<-v.entered
+	timeout := make(chan time.Time)
+	close(timeout)
+	q.drain(timeout)
 }

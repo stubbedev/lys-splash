@@ -143,6 +143,8 @@ type Config struct {
 	LoadTheme func(path string) (theme.Theme, error)
 	Clock     Clock
 	Log       *slog.Logger
+	// started hands a test the daemon as Run makes it.
+	started func(*daemon)
 }
 
 // previousBoot is what reading the previous boot's duration found.
@@ -180,6 +182,7 @@ type daemon struct {
 	cfg      Config
 	display  Display
 	vt       Terminal
+	vtq      *vtQueue
 	console  Console
 	messages console.Scrollback
 	details  bool
@@ -243,6 +246,9 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, dev D
 		started:  cfg.Clock.Now(),
 		timer:    cfg.Clock.NewTimer(),
 	}
+	if cfg.started != nil {
+		cfg.started(d)
+	}
 	if cfg.Mode == Boot {
 		d.loadPrevious()
 	}
@@ -258,6 +264,7 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, dev D
 		err = errors.Join(err, cfg.Server.Close(), <-served)
 	}()
 	if d.vt != nil {
+		d.vtq = newVTQueue(d.vt, cfg.Log)
 		go d.readKeys()
 	}
 	if d.console != nil {
@@ -470,7 +477,7 @@ func (d *daemon) output(b []byte) error {
 	if !d.details || d.vt == nil {
 		return nil
 	}
-	_, err := d.vt.Write(b)
+	_, err := d.vtq.Write(b)
 	return err
 }
 
@@ -501,7 +508,7 @@ func (d *daemon) toggleDetails() error {
 		if d.details {
 			return nil
 		}
-		_, err := d.vt.Write([]byte(console.ClearScreen))
+		_, err := d.vtq.Write([]byte(console.ClearScreen))
 		return err
 	}
 	if d.details {
@@ -621,11 +628,15 @@ func (d *daemon) reclaim() error {
 	if d.vt == nil {
 		return nil
 	}
-	err := d.vt.Reclaim()
-	if d.graphics {
-		err = errors.Join(err, d.vt.Graphics())
-	}
-	return err
+	graphics := d.graphics
+	d.vtq.do(func(vt Terminal) error {
+		err := vt.Reclaim()
+		if graphics {
+			err = errors.Join(err, vt.Graphics())
+		}
+		return err
+	})
+	return nil
 }
 
 // reload answers c once the theme is read again, which happens off the loop
@@ -677,9 +688,7 @@ func (d *daemon) redraw() error {
 	}
 	var errs []error
 	if d.vt != nil && !d.graphics {
-		if err := d.vt.Graphics(); err != nil {
-			errs = append(errs, err)
-		}
+		d.vtq.do(Terminal.Graphics)
 	}
 	d.graphics, d.shown = true, nil
 	if !slices.Equal(screens, d.screens) {
@@ -757,34 +766,32 @@ func (d *daemon) redrawText() error {
 	if d.vt == nil {
 		return nil
 	}
-	var errs []error
 	if d.graphics {
-		if err := d.vt.Text(); err != nil {
-			errs = append(errs, err)
-		}
+		d.vtq.do(Terminal.Text)
 		d.graphics, d.shown = false, nil
 	}
 	clear(d.drawn)
 	if d.details && d.shown == nil {
-		if err := d.showMessages(); err != nil {
-			errs = append(errs, err)
-		}
+		d.showMessages()
 	}
-	if err := (console.TextView{W: d.vt}).Show(d.shown, d.state); err != nil {
-		errs = append(errs, err)
-	}
+	err := console.TextView{W: d.vtq}.Show(d.shown, d.state)
 	d.inText = d.state
 	d.shown = &d.inText
-	return errors.Join(errs...)
+	return err
 }
 
-func (d *daemon) showMessages() error {
-	rows, err := d.vt.Rows()
-	if err != nil {
+// showMessages writes the end of the scrollback as it is now, once the queue
+// has asked the VT how much of it fits.
+func (d *daemon) showMessages() {
+	lines := d.messages.Lines()
+	d.vtq.do(func(vt Terminal) error {
+		rows, err := vt.Rows()
+		if err != nil {
+			return err
+		}
+		_, err = vt.Write(console.Screen(lines, rows))
 		return err
-	}
-	_, err = d.vt.Write(d.messages.Screen(rows))
-	return err
+	})
 }
 
 func (d *daemon) quit(retain bool) error {
@@ -800,6 +807,9 @@ func (d *daemon) quit(retain bool) error {
 		errs = append(errs, err)
 	}
 	if d.vt != nil {
+		if d.vtq != nil {
+			d.vtq.drain(time.After(vtDrainWait))
+		}
 		if retain && d.graphics {
 			errs = append(errs, d.vt.Leave())
 		} else {

@@ -174,7 +174,11 @@ func (s *Scrollback) Lines() []string {
 // Screen is what a terminal of rows lines shows of the scrollback: the
 // screen cleared, then the last lines, leaving the bottom row free.
 func (s *Scrollback) Screen(rows int) []byte {
-	lines := s.Lines()
+	return Screen(s.Lines(), rows)
+}
+
+// Screen is what a terminal of rows lines shows of lines.
+func Screen(lines []string, rows int) []byte {
 	lines = lines[max(len(lines)-max(rows-1, 0), 0):]
 	out := []byte(ClearScreen)
 	for _, l := range lines {
