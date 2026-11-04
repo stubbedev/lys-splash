@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"log/slog"
 	"maps"
 	"slices"
 	"sync"
@@ -52,6 +53,7 @@ type fakeDevice struct {
 	closedFBs   []uint32
 	destroyed   int
 	master      bool
+	masterTries int
 	masterErr   error
 	closed      bool
 	fd          int
@@ -164,6 +166,7 @@ func (d *fakeDevice) SetClientCap(uint64, uint64) error { return nil }
 func (d *fakeDevice) SetMaster() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.masterTries++
 	if d.masterErr != nil {
 		return d.masterErr
 	}
@@ -351,4 +354,21 @@ func (c *Card) Rescan() error {
 	r := c.probe()
 	c.apply(r)
 	return errors.Join(r.err, c.releaseRetired(r.dropped))
+}
+
+func (d *fakeDevice) triesAtMaster() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.masterTries
+}
+
+// openCard is opening a card with master free, as a worker does.
+func openCard(dev device, name string, firmware bool, scaler *Scaler, log *slog.Logger) (*Card, error) {
+	if err := atomicCaps(dev); err != nil {
+		return nil, err
+	}
+	if err := takeMaster(dev); err != nil {
+		return nil, err
+	}
+	return newCard(dev, name, firmware, scaler, log)
 }

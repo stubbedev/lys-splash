@@ -958,7 +958,7 @@ func TestDisplayLightsACardOnceItsMasterLetsGo(t *testing.T) {
 
 func TestDisplayBacksOffACardThatStaysBusyAndGivesUp(t *testing.T) {
 	t.Parallel()
-	_, devs := busyFake()
+	d, devs := busyFake()
 	wc := newWaitedClock()
 	var opens atomic.Int32
 	disp, err := open(Paths{Dev: t.TempDir(), Sysfs: t.TempDir()}, func(string) (device, error) {
@@ -977,22 +977,59 @@ func TestDisplayBacksOffACardThatStaysBusyAndGivesUp(t *testing.T) {
 		elapsed += w
 		waits = append(waits, w)
 	}
-	want := int32(len(waits) + 1)
-	pump(t, disp, func() bool { return opens.Load() == want })
+	want := len(waits) + 1
+	pump(t, disp, func() bool { return d.triesAtMaster() == want })
 	wc.assertNoWait(t)
 	if !slices.IsSorted(waits) || waits[0] != firstBusyRetry || waits[len(waits)-1] != lastBusyRetry {
 		t.Errorf("waits %v, want them growing from %v to %v", waits, firstBusyRetry, lastBusyRetry)
 	}
-	const everyFrame = int32(busyRetryFor / firstBusyRetry)
-	if got := opens.Load(); got > everyFrame/10 {
-		t.Errorf("%d opens in %v, want far fewer than the %d of a fixed %v", got, busyRetryFor, everyFrame, firstBusyRetry)
+	if got := opens.Load(); got != 1 {
+		t.Errorf("%d opens of a busy card in %v, want the one it stays open from", got, busyRetryFor)
 	}
-	t.Logf("%d opens in %v", opens.Load(), busyRetryFor)
+	const everyFrame = int(busyRetryFor / firstBusyRetry)
+	if got := d.triesAtMaster(); got > everyFrame/10 {
+		t.Errorf("%d tries for master in %v, want far fewer than the %d of a fixed %v", got, busyRetryFor, everyFrame, firstBusyRetry)
+	}
+	t.Logf("%d tries for master in %v", d.triesAtMaster(), busyRetryFor)
 	if len(disp.Outputs()) != 0 {
 		t.Errorf("after giving up: %d outputs", len(disp.Outputs()))
 	}
+	if !d.isClosed() {
+		t.Error("giving up left the busy card open")
+	}
 	if err := disp.Close(false); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAMasterThatClosesTheCardLightsItWithoutAnyTimer(t *testing.T) {
+	t.Parallel()
+	d, devs := busyFake()
+	wc := newWaitedClock()
+	disp, paths := fakeDisplayAt(t, devs, nil, wc.clock())
+	if got := d.triesAtMaster(); got != 1 {
+		t.Fatalf("%d tries for master opening the card", got)
+	}
+	d.setMasterErr(nil)
+	holder, err := os.OpenFile(filepath.Join(paths.Dev, "card0"), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	pump(t, disp, outputsAre(disp, 1))
+	wc.mu.Lock()
+	moved := !wc.now.Equal(time.Unix(1000, 0))
+	wc.mu.Unlock()
+	if moved {
+		t.Error("the card waited on a timer firing")
+	}
+	if err := disp.Close(false); err != nil {
+		t.Fatal(err)
+	}
+	if !d.isClosed() {
+		t.Error("Close left the card open")
 	}
 }
 

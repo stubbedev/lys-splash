@@ -144,16 +144,26 @@ type Card struct {
 	paused   bool
 }
 
-func openCard(dev device, name string, firmware bool, scaler *Scaler, log *slog.Logger) (*Card, error) {
-	c := &Card{dev: dev, name: name, firmware: firmware, scaler: scaler, log: log.With("card", name)}
+// atomicCaps asks dev for the client capabilities the display drives it with.
+func atomicCaps(dev device) error {
 	for _, capability := range []uint64{drm.ClientCapUniversal, drm.ClientCapAtomic} {
 		if err := dev.SetClientCap(capability, 1); err != nil {
-			return nil, fmt.Errorf("kms: %s: client capability %d: %w", dev.Path(), capability, err)
+			return fmt.Errorf("kms: %s: client capability %d: %w", dev.Path(), capability, err)
 		}
 	}
+	return nil
+}
+
+func takeMaster(dev device) error {
 	if err := dev.SetMaster(); err != nil {
-		return nil, fmt.Errorf("kms: %s: become DRM master: %w", dev.Path(), err)
+		return fmt.Errorf("kms: %s: become DRM master: %w", dev.Path(), err)
 	}
+	return nil
+}
+
+// newCard reads the CRTCs and primary planes of dev, which holds master.
+func newCard(dev device, name string, firmware bool, scaler *Scaler, log *slog.Logger) (*Card, error) {
+	c := &Card{dev: dev, name: name, firmware: firmware, scaler: scaler, log: log.With("card", name)}
 	res, err := dev.Resources()
 	if err != nil {
 		return nil, err
