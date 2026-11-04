@@ -64,3 +64,13 @@ func bootProgress(elapsed, total time.Duration) protocol.Percent {
 	}
 	return protocol.Percent(float64(max(elapsed, 0)) / float64(total) * float64(protocol.MaxPercent))
 }
+
+// nextPercentAt is the elapsed time at which bootProgress leaves p, which is
+// short of the last percent bootProgress reaches.
+func nextPercentAt(p protocol.Percent, total time.Duration) time.Duration {
+	at := time.Duration(float64(total) * float64(p+1) / float64(protocol.MaxPercent))
+	for bootProgress(at, total) <= p {
+		at++
+	}
+	return at
+}

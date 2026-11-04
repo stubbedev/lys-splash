@@ -435,3 +435,23 @@ func TestThrobberOffTheFrameDoesNotPanic(t *testing.T) {
 		prev = cur
 	}
 }
+
+func TestPhasesToNextPictureLandOnTheNextPicture(t *testing.T) {
+	t.Parallel()
+	for _, throbber := range []Throbber{Spinner, Dots} {
+		th := Default()
+		th.Throbber = throbber
+		r := renderer(t, th, nil)
+		for phase := range Frames {
+			n := r.PhasesToNextPicture(phase)
+			for i := 1; i < n; i++ {
+				if r.step(phase+i) != r.step(phase) {
+					t.Fatalf("throbber %v: phase %d changes after %d phases, not %d", throbber, phase, i, n)
+				}
+			}
+			if r.step(phase+n) == r.step(phase) {
+				t.Errorf("throbber %v: phase %d shows the same picture after %d phases", throbber, phase, n)
+			}
+		}
+	}
+}

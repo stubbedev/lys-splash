@@ -249,6 +249,16 @@ func (r *Renderer) step(phase int) int {
 	return phase % Frames
 }
 
+// PhasesToNextPicture is how many phases from phase the throbber shows a
+// different picture.
+func (r *Renderer) PhasesToNextPicture(phase int) int {
+	if r.theme.Throbber != Dots {
+		return 1
+	}
+	phase %= Frames
+	return ((phase*dotCount/Frames+1)*Frames+dotCount-1)/dotCount - phase
+}
+
 // stepThrobber brings the throbber's rectangle to phase. Each picture is
 // computed per pixel once and copied from then on, since a boot repeats the
 // same few dozen for as long as it lasts.

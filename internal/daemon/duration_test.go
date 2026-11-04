@@ -285,3 +285,15 @@ func TestBootShowsProgressOnlyWithAPreviousBoot(t *testing.T) {
 		}
 	}
 }
+
+func TestNextPercentAtIsWhereTheProgressMoves(t *testing.T) {
+	t.Parallel()
+	for _, total := range []time.Duration{time.Second, 7 * time.Second, 12345678 * time.Microsecond, time.Hour} {
+		for p := protocol.Percent(0); p < protocol.MaxPercent-1; p++ {
+			at := nextPercentAt(p, total)
+			if bootProgress(at, total) <= p || bootProgress(at-1, total) > p {
+				t.Fatalf("total %v: progress %d leaves at %v, where it is %d and just before %d", total, p, at, bootProgress(at, total), bootProgress(at-1, total))
+			}
+		}
+	}
+}

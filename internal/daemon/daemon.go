@@ -26,7 +26,7 @@ import (
 	"github.com/stubbedev/lys-splash/internal/theme"
 )
 
-// FrameInterval is how often the throbber steps.
+// FrameInterval is how long one of the throbber's phases lasts.
 const FrameInterval = time.Second / 30
 
 // Screen is one output the splash draws on.
@@ -134,6 +134,7 @@ type Config struct {
 	SaveBootDuration func(path string, d time.Duration) error
 	// LoadTheme reads the theme Reload shows.
 	LoadTheme func(path string) (theme.Theme, error)
+	Clock     Clock
 	Log       *slog.Logger
 }
 
@@ -191,6 +192,13 @@ type daemon struct {
 	// reloads wait for the next theme load, reloading says one is running.
 	reloads   []*server.Call
 	reloading bool
+	// The timer is armed for the next change of the picture, counted from
+	// phaseAt, the start of the phase showing; ticking says the animation is
+	// running and rearm that the deadline has to be worked out again.
+	timer   Timer
+	phaseAt time.Time
+	ticking bool
+	rearm   bool
 }
 
 // Run serves the splash until a quit request or ctx ends. ctx ending is a
@@ -215,7 +223,8 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, dev D
 		inbox:    make(chan event, 16),
 		done:     make(chan struct{}),
 		state:    theme.State{Updating: cfg.Mode == Updates},
-		started:  time.Now(),
+		started:  cfg.Clock.Now(),
+		timer:    cfg.Clock.NewTimer(),
 	}
 	if cfg.Mode == Boot {
 		d.loadPrevious()
@@ -266,20 +275,57 @@ func (d *daemon) previousLoaded(p *previousBoot) {
 	case err != nil:
 		d.cfg.Log.Warn("showing no boot progress", "err", err)
 	default:
-		d.previous, d.state.Booting = p.total, true
+		d.previous, d.state.Booting, d.rearm = p.total, true, true
 	}
 }
 
+// tick is the channel of the next change of the animation, nil while nothing
+// animates: the timer only ever wakes the loop for a picture that differs.
+func (d *daemon) tick() <-chan time.Time {
+	if !d.animating() {
+		if d.ticking {
+			d.timer.Stop()
+			d.ticking = false
+		}
+		return nil
+	}
+	if !d.ticking {
+		d.ticking, d.rearm = true, true
+		d.phaseAt = d.cfg.Clock.Now()
+	}
+	if d.rearm {
+		d.rearm = false
+		d.timer.Reset(d.untilNextChange())
+	}
+	return d.timer.C()
+}
+
+func (d *daemon) untilNextChange() time.Duration {
+	next := d.phaseAt.Add(time.Duration(d.renderer.PhasesToNextPicture(d.state.Phase)) * FrameInterval)
+	if d.previous > 0 && d.state.Progress < protocol.MaxPercent-1 {
+		if at := d.started.Add(nextPercentAt(d.state.Progress, d.previous)); at.Before(next) {
+			next = at
+		}
+	}
+	return max(next.Sub(d.cfg.Clock.Now()), 0)
+}
+
+func (d *daemon) step() {
+	now := d.cfg.Clock.Now()
+	phases := now.Sub(d.phaseAt) / FrameInterval
+	d.state.Phase = (d.state.Phase + int(phases%theme.Frames)) % theme.Frames
+	d.phaseAt = d.phaseAt.Add(phases * FrameInterval)
+	if d.previous > 0 {
+		d.state.Progress = bootProgress(now.Sub(d.started), d.previous)
+	}
+	d.rearm = true
+}
+
 func (d *daemon) loop(ctx context.Context) error {
-	ticker := time.NewTicker(FrameInterval)
-	defer ticker.Stop()
+	defer d.timer.Stop()
 	for {
 		var reply func() error
 		var err error
-		var tick <-chan time.Time
-		if d.animating() {
-			tick = ticker.C
-		}
 		select {
 		case <-ctx.Done():
 			return errors.Join(d.quit(d.cfg.Mode.stopping()), d.recordDuration())
@@ -306,11 +352,8 @@ func (d *daemon) loop(ctx context.Context) error {
 			var changed bool
 			changed, err = d.display.Handle(e)
 			d.stale = d.stale || changed
-		case <-tick:
-			d.state.Phase = (d.state.Phase + 1) % theme.Frames
-			if d.previous > 0 {
-				d.state.Progress = bootProgress(time.Since(d.started), d.previous)
-			}
+		case <-d.tick():
+			d.step()
 		}
 		if d.stale || d.state != d.settled {
 			err = errors.Join(err, d.redraw())
@@ -571,7 +614,7 @@ func (d *daemon) themeLoaded(l *themeLoad) (func() error, error) {
 		d.loadTheme()
 	}
 	if l.renderer != nil {
-		d.renderer, d.units = l.renderer, l.units
+		d.renderer, d.units, d.rearm = l.renderer, l.units, true
 		clear(d.drawn)
 		d.shown, d.stale = nil, true
 	}
@@ -701,5 +744,5 @@ func (d *daemon) recordDuration() error {
 	if d.cfg.Mode != Boot || !d.switched || !d.writable {
 		return nil
 	}
-	return d.cfg.SaveBootDuration(d.cfg.BootDuration, time.Since(d.started))
+	return d.cfg.SaveBootDuration(d.cfg.BootDuration, d.cfg.Clock.Now().Sub(d.started))
 }

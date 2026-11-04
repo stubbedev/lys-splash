@@ -308,6 +308,7 @@ func serve(o options, log *slog.Logger) (err error) {
 		LoadBootDuration: daemon.LoadBootDuration,
 		SaveBootDuration: daemon.SaveBootDuration,
 		LoadTheme:        theme.Load,
+		Clock:            daemon.SystemClock{},
 		Log:              log,
 	}
 	return daemon.Run(ctx, cfg, t, bgrt, daemon.Devices{Display: &daemon.KMS{Display: display}, VT: vt, Console: capture})
