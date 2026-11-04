@@ -4,6 +4,7 @@ import (
 	"errors"
 	"image"
 	"slices"
+	"sync"
 
 	"github.com/stubbedev/lys-lib/drm"
 	"github.com/stubbedev/lys-lib/third_party/gomath"
@@ -43,6 +44,7 @@ func placeholder(size image.Point) bool {
 // firmware framebuffer forced a guess, the native driver's outputs keep the
 // guessed value even when their mode differs, so the picture does not jump.
 type Scaler struct {
+	mu      sync.Mutex
 	guessed int
 }
 
@@ -51,6 +53,8 @@ type Scaler struct {
 // that does not know its display's size guesses from the resolution alone,
 // and every later output takes the firmware's guess.
 func (s *Scaler) Scale(size image.Point, mm [2]uint32, firmware bool) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if firmware && (s.guessed > 0 || !knowsSize(size, mm)) {
 		s.guessed = guessScale(size)
 	}

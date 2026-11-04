@@ -7,8 +7,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -623,6 +627,11 @@ func TestOpenCardWithoutMaster(t *testing.T) {
 
 func fakeDisplay(t *testing.T, devs map[string]*fakeDevice, drivers map[string]string) (*Display, Paths) {
 	t.Helper()
+	return fakeDisplayAt(t, devs, drivers, systemClock)
+}
+
+func fakeDisplayAt(t *testing.T, devs map[string]*fakeDevice, drivers map[string]string, clk clock) (*Display, Paths) {
+	t.Helper()
 	dir := t.TempDir()
 	paths := Paths{Dev: filepath.Join(dir, "dri"), Sysfs: filepath.Join(dir, "sys")}
 	for _, p := range []string{paths.Dev, paths.Sysfs} {
@@ -653,11 +662,96 @@ func fakeDisplay(t *testing.T, devs map[string]*fakeDevice, drivers map[string]s
 			return nil, os.ErrNotExist
 		}
 		return d, nil
-	}, false, quiet)
+	}, false, clk, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return disp, paths
+}
+
+// pump is the frame loop: it applies events until done says what the test was
+// waiting for has happened.
+func pump(t *testing.T, disp *Display, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case e := <-disp.Events():
+			if _, err := disp.Handle(e); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		default:
+		}
+		if done() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("what the loop was waiting for did not happen in 5s")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func outputsAre(disp *Display, n int) func() bool {
+	return func() bool { return len(disp.Outputs()) == n }
+}
+
+// waitedClock is a clock whose waits end when the test says.
+type waitedClock struct {
+	mu    sync.Mutex
+	now   time.Time
+	waits chan waited
+}
+
+type waited struct {
+	d     time.Duration
+	fired chan time.Time
+}
+
+func newWaitedClock() *waitedClock {
+	return &waitedClock{now: time.Unix(1000, 0), waits: make(chan waited, 1024)}
+}
+
+func (c *waitedClock) clock() clock {
+	return clock{
+		now: func() time.Time {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			return c.now
+		},
+		after: func(d time.Duration) <-chan time.Time {
+			fired := make(chan time.Time, 1)
+			c.waits <- waited{d, fired}
+			return fired
+		},
+	}
+}
+
+// fire ends the next wait, moving the time on by it, and returns its length.
+func (c *waitedClock) fire(t *testing.T) time.Duration {
+	t.Helper()
+	select {
+	case w := <-c.waits:
+		c.mu.Lock()
+		c.now = c.now.Add(w.d)
+		now := c.now
+		c.mu.Unlock()
+		w.fired <- now
+		return w.d
+	case <-time.After(5 * time.Second):
+		t.Fatal("no wait to try the busy card again")
+		return 0
+	}
+}
+
+func (c *waitedClock) assertNoWait(t *testing.T) {
+	t.Helper()
+	select {
+	case w := <-c.waits:
+		t.Fatalf("a wait of %v after the display stopped trying", w.d)
+	case <-time.After(50 * time.Millisecond):
+	}
 }
 
 func switchDrivers(t *testing.T, simple, native *fakeDevice, firmwareScale int) *Display {
@@ -672,9 +766,10 @@ func switchDrivers(t *testing.T, simple, native *fakeDevice, firmwareScale int) 
 	if _, err := disp.Handle(Event{uevent: []byte(remove)}); err != nil {
 		t.Fatal(err)
 	}
-	if len(disp.Outputs()) != 0 || !simple.closed {
-		t.Fatal("the removed simpledrm card is still open")
+	if len(disp.Outputs()) != 0 {
+		t.Fatal("the removed simpledrm card still has outputs")
 	}
+	pump(t, disp, simple.isClosed)
 	devs["card1"] = native
 	if err := os.WriteFile(filepath.Join(paths.Dev, "card1"), nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -683,6 +778,7 @@ func switchDrivers(t *testing.T, simple, native *fakeDevice, firmwareScale int) 
 	if _, err := disp.Handle(Event{uevent: []byte(add)}); err != nil {
 		t.Fatal(err)
 	}
+	pump(t, disp, outputsAre(disp, 1))
 	return disp
 }
 
@@ -735,7 +831,7 @@ func TestDisplayWithoutCards(t *testing.T) {
 	if err := disp.Close(false); err != nil {
 		t.Fatal(err)
 	}
-	missing, err := open(Paths{Dev: filepath.Join(t.TempDir(), "none"), Sysfs: t.TempDir()}, nil, false, quiet)
+	missing, err := open(Paths{Dev: filepath.Join(t.TempDir(), "none"), Sysfs: t.TempDir()}, nil, false, systemClock, quiet)
 	if err != nil || len(missing.Outputs()) != 0 {
 		t.Errorf("a missing /dev/dri: %v, %v", missing, err)
 	}
@@ -759,12 +855,14 @@ func TestDisplayDeactivatesNewCards(t *testing.T) {
 	if _, err := disp.Handle(Event{uevent: []byte("add@/x/card1\x00SUBSYSTEM=drm\x00DEVNAME=dri/card1\x00")}); err != nil {
 		t.Fatal(err)
 	}
+	pump(t, disp, func() bool { return disp.cards["card1"] != nil })
 	if a.master || b.master {
 		t.Errorf("master while deactivated: card0 %v, card1 %v", a.master, b.master)
 	}
 	if err := disp.Reactivate(); err != nil {
 		t.Fatal(err)
 	}
+	pump(t, disp, outputsAre(disp, 2))
 	if !a.master || !b.master || len(disp.Outputs()) != 2 {
 		t.Errorf("after Reactivate: master %v %v, %d outputs", a.master, b.master, len(disp.Outputs()))
 	}
@@ -823,81 +921,272 @@ func nextEvent(t *testing.T, disp *Display) Event {
 	case e := <-disp.Events():
 		return e
 	case <-time.After(5 * time.Second):
-		t.Fatal("no event to try the busy card again")
+		t.Fatal("no event")
 		return Event{}
-	}
-}
-
-func assertNoEvent(t *testing.T, disp *Display) {
-	t.Helper()
-	select {
-	case e := <-disp.Events():
-		t.Fatalf("an event after the display stopped trying: %+v", e)
-	case <-time.After(5 * busyRetryEvery):
 	}
 }
 
 func TestDisplayLightsACardOnceItsMasterLetsGo(t *testing.T) {
 	t.Parallel()
 	d, devs := busyFake()
-	disp, _ := fakeDisplay(t, devs, nil)
+	wc := newWaitedClock()
+	disp, _ := fakeDisplayAt(t, devs, nil, wc.clock())
 	if len(disp.Outputs()) != 0 {
 		t.Fatal("a busy card has outputs")
 	}
-	if _, err := disp.Handle(nextEvent(t, disp)); err != nil {
+	wc.fire(t)
+	wc.fire(t)
+	if n := len(disp.Events()); n != 0 {
+		t.Fatalf("%d events for a card still busy: its retries belong to its worker", n)
+	}
+	select {
+	case w := <-wc.waits:
+		d.setMasterErr(nil)
+		w.fired <- time.Time{}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no wait to try the busy card again")
+	}
+	pump(t, disp, outputsAre(disp, 1))
+	if !d.master {
+		t.Error("the card lit without master")
+	}
+	wc.assertNoWait(t)
+	if err := disp.Close(false); err != nil {
 		t.Fatal(err)
 	}
-	if len(disp.Outputs()) != 0 {
-		t.Fatal("a card still busy has outputs")
-	}
-	e := nextEvent(t, disp)
-	d.masterErr = nil
-	if _, err := disp.Handle(e); err != nil {
-		t.Fatal(err)
-	}
-	if !d.master || len(disp.Outputs()) != 1 {
-		t.Errorf("after the master let go: master %v, %d outputs", d.master, len(disp.Outputs()))
-	}
-	assertNoEvent(t, disp)
 }
 
-func TestDisplayGivesUpOnACardThatStaysBusy(t *testing.T) {
+func TestDisplayBacksOffACardThatStaysBusyAndGivesUp(t *testing.T) {
 	t.Parallel()
 	_, devs := busyFake()
-	disp, _ := fakeDisplay(t, devs, nil)
-	e := nextEvent(t, disp)
-	e.until = time.Now().Add(-time.Second)
-	if _, err := disp.Handle(e); err != nil {
+	wc := newWaitedClock()
+	var opens atomic.Int32
+	disp, err := open(Paths{Dev: t.TempDir(), Sysfs: t.TempDir()}, func(string) (device, error) {
+		opens.Add(1)
+		return devs["card0"], nil
+	}, false, wc.clock(), quiet)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := disp.Handle(Event{uevent: []byte("add@/x/card0\x00SUBSYSTEM=drm\x00DEVNAME=dri/card0\x00")}); err != nil {
+		t.Fatal(err)
+	}
+	var waits []time.Duration
+	for elapsed := time.Duration(0); elapsed < busyRetryFor; {
+		w := wc.fire(t)
+		elapsed += w
+		waits = append(waits, w)
+	}
+	want := int32(len(waits) + 1)
+	pump(t, disp, func() bool { return opens.Load() == want })
+	wc.assertNoWait(t)
+	if !slices.IsSorted(waits) || waits[0] != firstBusyRetry || waits[len(waits)-1] != lastBusyRetry {
+		t.Errorf("waits %v, want them growing from %v to %v", waits, firstBusyRetry, lastBusyRetry)
+	}
+	const everyFrame = int32(busyRetryFor / firstBusyRetry)
+	if got := opens.Load(); got > everyFrame/10 {
+		t.Errorf("%d opens in %v, want far fewer than the %d of a fixed %v", got, busyRetryFor, everyFrame, firstBusyRetry)
+	}
+	t.Logf("%d opens in %v", opens.Load(), busyRetryFor)
 	if len(disp.Outputs()) != 0 {
 		t.Errorf("after giving up: %d outputs", len(disp.Outputs()))
 	}
-	assertNoEvent(t, disp)
+	if err := disp.Close(false); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestDisplayStopsTryingABusyCardWhileDeactivated(t *testing.T) {
 	t.Parallel()
 	_, devs := busyFake()
-	disp, _ := fakeDisplay(t, devs, nil)
+	wc := newWaitedClock()
+	disp, _ := fakeDisplayAt(t, devs, nil, wc.clock())
 	if err := disp.Deactivate(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := disp.Handle(nextEvent(t, disp)); err != nil {
+	wc.assertNoWaitAfterOne(t)
+	if err := disp.Close(false); err != nil {
 		t.Fatal(err)
 	}
-	assertNoEvent(t, disp)
+}
+
+func (c *waitedClock) assertNoWaitAfterOne(t *testing.T) {
+	t.Helper()
+	select {
+	case w := <-c.waits:
+		w.fired <- time.Unix(0, 0)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no wait from opening the busy card")
+	}
+	c.assertNoWait(t)
 }
 
 func TestDisplayDoesNotRetryOtherFailures(t *testing.T) {
 	t.Parallel()
 	d, devs := busyFake()
 	d.masterErr = unix.EPERM
-	disp, _ := fakeDisplay(t, devs, nil)
+	wc := newWaitedClock()
+	disp, _ := fakeDisplayAt(t, devs, nil, wc.clock())
 	if len(disp.Outputs()) != 0 {
 		t.Fatal("a card without master has outputs")
 	}
-	assertNoEvent(t, disp)
+	wc.assertNoWait(t)
+	if err := disp.Close(false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func goroutineID() uint64 {
+	buf := make([]byte, 64)
+	n := runtime.Stack(buf, false)
+	id, _, _ := strings.Cut(strings.TrimPrefix(string(buf[:n]), "goroutine "), " ")
+	v, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func TestProbingAndLightingNeverHoldTheFlips(t *testing.T) {
+	t.Parallel()
+	loop := goroutineID()
+	first := newFakeDevice("/dev/dri/card0", 2)
+	first.connect(40, [2]uint32{531, 299}, mode(64, 32, true))
+	second := newFakeDevice("/dev/dri/card1", 1)
+	second.connect(50, [2]uint32{531, 299}, mode(64, 32, true))
+	var onLoop atomic.Int32
+	count := func() {
+		if goroutineID() == loop {
+			onLoop.Add(1)
+		}
+	}
+	entered, release := make(chan struct{}, 8), make(chan struct{})
+	block := func() {
+		count()
+		entered <- struct{}{}
+		<-release
+	}
+	devs := map[string]*fakeDevice{"card0": first}
+	disp, paths := fakeDisplay(t, devs, nil)
+	o := disp.Outputs()[0]
+	first.mu.Lock()
+	first.onConnector, first.onDumb = block, count
+	first.mu.Unlock()
+	second.onConnector, second.onDumb = block, count
+	devs["card1"] = second
+	if err := os.WriteFile(filepath.Join(paths.Dev, "card1"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first.connect(41, [2]uint32{531, 299}, mode(32, 16, true))
+	for _, msg := range []string{
+		"change@/x/card0\x00SUBSYSTEM=drm\x00DEVNAME=dri/card0\x00HOTPLUG=1\x00",
+		"add@/x/card1\x00SUBSYSTEM=drm\x00DEVNAME=dri/card1\x00",
+	} {
+		if _, err := disp.Handle(Event{uevent: []byte(msg)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the workers never probed")
+		}
+	}
+	const flips = 100
+	before := len(first.real())
+	whole := DamageOf(image.Rect(0, 0, 8, 8))
+	for range flips {
+		if err := o.Present(whole); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := disp.Handle(Event{card: o.card, flip: drm.FlipEvent{UserData: uint64(o.crtc.id)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(first.real()) - before; got != flips {
+		t.Errorf("%d flips while two probes were pending, want %d", got, flips)
+	}
+	if got := len(disp.Outputs()); got != 1 {
+		t.Errorf("%d outputs while probing, want the state changed only by the loop's events", got)
+	}
+	close(release)
+	pump(t, disp, outputsAre(disp, 3))
+	if got := onLoop.Load(); got != 0 {
+		t.Errorf("%d connector probes and buffer allocations on the loop's goroutine", got)
+	}
+	if err := disp.Close(false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestACardRemovedWhileBeingLitIsClosedAndNeverShown(t *testing.T) {
+	t.Parallel()
+	d := newFakeDevice("/dev/dri/card1", 1)
+	d.connect(50, [2]uint32{531, 299}, mode(64, 32, true))
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	d.onConnector = func() {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-release
+	}
+	devs := map[string]*fakeDevice{}
+	disp, paths := fakeDisplay(t, devs, nil)
+	devs["card1"] = d
+	if err := os.WriteFile(filepath.Join(paths.Dev, "card1"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := disp.Handle(Event{uevent: []byte("add@/x/card1\x00SUBSYSTEM=drm\x00DEVNAME=dri/card1\x00")}); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	if _, err := disp.Handle(Event{uevent: []byte("remove@/x/card1\x00SUBSYSTEM=drm\x00DEVNAME=dri/card1\x00")}); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	pump(t, disp, d.isClosed)
+	if got := len(disp.Outputs()); got != 0 {
+		t.Errorf("a card removed while being lit shows %d outputs", got)
+	}
+	if err := disp.Close(false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnUnpluggedOutputIsFreedOnlyAfterTheLoopDropsIt(t *testing.T) {
+	t.Parallel()
+	d := newFakeDevice("/dev/dri/card0", 1)
+	d.connect(40, [2]uint32{531, 299}, mode(64, 32, true))
+	disp, _ := fakeDisplay(t, map[string]*fakeDevice{"card0": d}, nil)
+	d.mu.Lock()
+	d.connectors[40].conn.Connection = drm.Disconnected
+	d.mu.Unlock()
+	if _, err := disp.Handle(Event{uevent: []byte("change@/x/card0\x00SUBSYSTEM=drm\x00DEVNAME=dri/card0\x00HOTPLUG=1\x00")}); err != nil {
+		t.Fatal(err)
+	}
+	e := nextEvent(t, disp)
+	d.mu.Lock()
+	destroyed := d.destroyed
+	d.mu.Unlock()
+	if len(disp.Outputs()) != 1 || destroyed != 0 {
+		t.Fatalf("before the loop applied the probe: %d outputs, %d buffers freed", len(disp.Outputs()), destroyed)
+	}
+	if _, err := disp.Handle(e); err != nil {
+		t.Fatal(err)
+	}
+	if len(disp.Outputs()) != 0 {
+		t.Fatal("the loop still has the output")
+	}
+	pump(t, disp, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.destroyed == 2
+	})
+	if err := disp.Close(false); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestDamageClipsBlobIsReusedWhileTheDamageStays(t *testing.T) {

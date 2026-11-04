@@ -116,7 +116,19 @@ func newPlane(id, possible uint32, props map[string]drm.Property) (*plane, error
 	return pl, p.err()
 }
 
-// Card is one open DRM card and the outputs lit on it.
+// scanResult is what probing a card's connectors changed.
+type scanResult struct {
+	card    *Card
+	added   []*Output
+	dropped []*Output
+	err     error
+}
+
+// Card is one open DRM card and the outputs lit on it. The loop owns outputs,
+// what it draws on, and the commit in req. Whatever probes or allocates, and with
+// it crtcs, planes, built and retired, belongs to the card's worker: built are
+// the outputs it holds buffers for and retired those the loop still has to stop
+// drawing on.
 type Card struct {
 	dev      device
 	name     string
@@ -126,6 +138,8 @@ type Card struct {
 	crtcs    []*crtc
 	planes   []*plane
 	outputs  []*Output
+	built    []*Output
+	retired  []*Output
 	req      drm.Request
 	paused   bool
 }
@@ -202,23 +216,25 @@ func (c *Card) Name() string {
 	return c.name
 }
 
-// Rescan lights every connected connector not lit yet and drops the outputs
-// whose connector went away, as after a hotplug. A connector that fails to
-// light is reported and the others are lit regardless.
-func (c *Card) Rescan() error {
+// probe lights every connected connector not lit yet and retires the outputs
+// whose connector went away, as after a hotplug, for apply to bring to the loop.
+// A connector that fails to light is reported and the others are lit regardless.
+func (c *Card) probe() scanResult {
 	res, err := c.dev.Resources()
 	if err != nil {
-		return err
+		return scanResult{card: c, err: err}
 	}
 	return c.scan(res.Connectors)
 }
 
-func (c *Card) scan(connectors []uint32) error {
+func (c *Card) scan(connectors []uint32) scanResult {
+	r := scanResult{card: c}
 	var errs []error
-	for _, o := range slices.Clone(c.outputs) {
+	for _, o := range slices.Clone(c.built) {
 		conn, err := c.dev.Connector(o.connector.id)
 		if !slices.Contains(connectors, o.connector.id) || errors.Is(err, unix.ENOENT) || err == nil && conn.Connection != drm.Connected {
-			errs = append(errs, c.drop(o))
+			c.retire(o)
+			r.dropped = append(r.dropped, o)
 			continue
 		}
 		if err != nil {
@@ -226,7 +242,7 @@ func (c *Card) scan(connectors []uint32) error {
 		}
 	}
 	for _, id := range connectors {
-		if slices.ContainsFunc(c.outputs, func(o *Output) bool { return o.connector.id == id }) {
+		if slices.ContainsFunc(c.built, func(o *Output) bool { return o.connector.id == id }) {
 			continue
 		}
 		conn, err := c.dev.Connector(id)
@@ -240,16 +256,45 @@ func (c *Card) scan(connectors []uint32) error {
 		if conn.Connection != drm.Connected || len(conn.Modes) == 0 {
 			continue
 		}
-		if err := c.add(conn); err != nil {
+		o, err := c.add(conn)
+		if err != nil {
 			errs = append(errs, fmt.Errorf("kms: %s: light %s: %w", c.dev.Path(), conn.Name(), err))
+			continue
+		}
+		if o != nil {
+			r.added = append(r.added, o)
+		}
+	}
+	r.err = errors.Join(errs...)
+	return r
+}
+
+// retire gives up o\'s CRTC and plane. Its buffers stay until the loop no longer
+// draws on it, and then releaseRetired frees them.
+func (c *Card) retire(o *Output) {
+	c.built = slices.DeleteFunc(c.built, func(x *Output) bool { return x == o })
+	c.retired = append(c.retired, o)
+	o.crtc.taken, o.plane.taken = false, false
+}
+
+func (c *Card) releaseRetired(outputs []*Output) error {
+	var errs []error
+	for _, o := range outputs {
+		if o.card != c {
+			continue
+		}
+		c.retired = slices.DeleteFunc(c.retired, func(x *Output) bool { return x == o })
+		if err := o.release(false); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
 }
 
-func (c *Card) drop(o *Output) error {
-	c.outputs = slices.DeleteFunc(c.outputs, func(x *Output) bool { return x == o })
-	return o.release(false)
+// apply brings what a probe changed to what the loop draws on.
+func (c *Card) apply(r scanResult) {
+	c.outputs = slices.DeleteFunc(c.outputs, func(o *Output) bool { return slices.Contains(r.dropped, o) })
+	c.outputs = append(c.outputs, r.added...)
 }
 
 func (c *Card) pick(conn drm.Connector, routed uint32) (*crtc, *plane, error) {
@@ -330,39 +375,39 @@ func (c *Card) orientation(props map[string]drm.Property) (Rotation, error) {
 	return Upright, fmt.Errorf("kms: panel orientation %d is none of %v", p.Value, info.Enums)
 }
 
-func (c *Card) add(conn drm.Connector) error {
+func (c *Card) add(conn drm.Connector) (*Output, error) {
 	props, err := c.dev.Properties(conn.ID, drm.ObjectConnector)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	connected, err := newConnector(conn.ID, props)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	routed, err := intconv.Exact[uint32](props["CRTC_ID"].Value)
 	if err != nil {
-		return fmt.Errorf("CRTC_ID: %w", err)
+		return nil, fmt.Errorf("CRTC_ID: %w", err)
 	}
 	cr, pl, err := c.pick(conn, routed)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	lit, err := c.litMode(cr, routed)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	mode, err := chooseMode(conn.Modes, lit)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	size := modeSize(mode)
 	if c.firmware && placeholder(size) {
 		c.log.Info("waiting for the native driver instead of the firmware's placeholder mode", "connector", conn.Name(), "size", size)
-		return nil
+		return nil, nil
 	}
 	rot, err := c.orientation(props)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	o := &Output{
 		card:      c,
@@ -378,11 +423,12 @@ func (c *Card) add(conn drm.Connector) error {
 	}
 	cr.taken, pl.taken = true, true
 	if err := o.allocate(); err != nil {
-		return errors.Join(err, o.release(false))
+		cr.taken, pl.taken = false, false
+		return nil, errors.Join(err, o.release(false))
 	}
-	c.outputs = append(c.outputs, o)
+	c.built = append(c.built, o)
 	c.log.Info("lit an output", "connector", o.name, "size", size, "scale", o.scale, "rotation", rot, "kept the lit mode", lit != nil)
-	return nil
+	return o, nil
 }
 
 // Outputs are the card's lit outputs.
@@ -438,10 +484,14 @@ func (c *Card) Reactivate() error {
 // wrapping drm.ErrNoCloseFB says the kernel could not keep it.
 func (c *Card) Release(retain bool) error {
 	var errs []error
-	for _, o := range c.outputs {
+	for _, o := range c.built {
 		errs = append(errs, o.release(retain))
+		o.crtc.taken, o.plane.taken = false, false
 	}
-	c.outputs = nil
+	for _, o := range c.retired {
+		errs = append(errs, o.release(false))
+	}
+	c.outputs, c.built, c.retired = nil, nil, nil
 	return errors.Join(errs...)
 }
 
@@ -538,7 +588,6 @@ func (o *Output) release(retain bool) error {
 			o.clips[i] = damageBlob{}
 		}
 	}
-	o.crtc.taken, o.plane.taken = false, false
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("kms: %s: release %s: %w", dev.Path(), o.name, err)
 	}

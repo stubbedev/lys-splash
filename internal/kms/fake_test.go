@@ -1,10 +1,12 @@
 package kms
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"maps"
 	"slices"
+	"sync"
 
 	"github.com/stubbedev/lys-lib/drm"
 	"github.com/stubbedev/lys-lib/fourcc"
@@ -28,28 +30,31 @@ type fakeConnector struct {
 }
 
 type fakeDevice struct {
-	path       string
-	propIDs    map[string]uint32
-	objects    map[uint32]map[string]uint64
-	crtcs      []uint32
-	planes     []uint32
-	planeInfo  map[uint32]drm.Plane
-	connectors map[uint32]*fakeConnector
-	encoders   map[uint32]drm.Encoder
-	blobs      map[uint32][]byte
-	created    map[uint32][]byte
-	fbs        map[uint32]drm.FB
-	nextID     uint32
-	commits    []commit
-	refuse     func(flags uint32) error
-	forget     bool
-	removed    []uint32
-	closedFBs  []uint32
-	destroyed  int
-	master     bool
-	masterErr  error
-	closed     bool
-	fd         int
+	mu          sync.Mutex
+	onConnector func()
+	onDumb      func()
+	path        string
+	propIDs     map[string]uint32
+	objects     map[uint32]map[string]uint64
+	crtcs       []uint32
+	planes      []uint32
+	planeInfo   map[uint32]drm.Plane
+	connectors  map[uint32]*fakeConnector
+	encoders    map[uint32]drm.Encoder
+	blobs       map[uint32][]byte
+	created     map[uint32][]byte
+	fbs         map[uint32]drm.FB
+	nextID      uint32
+	commits     []commit
+	refuse      func(flags uint32) error
+	forget      bool
+	removed     []uint32
+	closedFBs   []uint32
+	destroyed   int
+	master      bool
+	masterErr   error
+	closed      bool
+	fd          int
 }
 
 func newFakeDevice(path string, crtcs int) *fakeDevice {
@@ -132,6 +137,8 @@ func (d *fakeDevice) propName(id uint32) string {
 
 func (d *fakeDevice) Path() string { return d.path }
 func (d *fakeDevice) FD() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.fd == 0 {
 		fd, err := unix.Eventfd(0, unix.EFD_CLOEXEC)
 		if err != nil {
@@ -143,6 +150,8 @@ func (d *fakeDevice) FD() int {
 }
 
 func (d *fakeDevice) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.closed = true
 	if d.fd != 0 {
 		return unix.Close(d.fd)
@@ -153,6 +162,8 @@ func (d *fakeDevice) Close() error {
 func (d *fakeDevice) SetClientCap(uint64, uint64) error { return nil }
 
 func (d *fakeDevice) SetMaster() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.masterErr != nil {
 		return d.masterErr
 	}
@@ -161,6 +172,8 @@ func (d *fakeDevice) SetMaster() error {
 }
 
 func (d *fakeDevice) DropMaster() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if !d.master {
 		return unix.EINVAL
 	}
@@ -169,10 +182,20 @@ func (d *fakeDevice) DropMaster() error {
 }
 
 func (d *fakeDevice) Resources() (drm.Resources, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	return drm.Resources{CRTCs: d.crtcs, Connectors: slices.Sorted(maps.Keys(d.connectors))}, nil
 }
 
 func (d *fakeDevice) Connector(id uint32) (drm.Connector, error) {
+	d.mu.Lock()
+	hook := d.onConnector
+	d.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	c, ok := d.connectors[id]
 	if !ok {
 		return drm.Connector{}, unix.ENOENT
@@ -181,6 +204,8 @@ func (d *fakeDevice) Connector(id uint32) (drm.Connector, error) {
 }
 
 func (d *fakeDevice) Encoder(id uint32) (drm.Encoder, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	return d.encoders[id], nil
 }
 
@@ -189,6 +214,8 @@ func (d *fakeDevice) Planes() ([]uint32, error) { return d.planes, nil }
 func (d *fakeDevice) Plane(id uint32) (drm.Plane, error) { return d.planeInfo[id], nil }
 
 func (d *fakeDevice) Properties(id, _ uint32) (map[string]drm.Property, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	out := map[string]drm.Property{}
 	for name, v := range d.objects[id] {
 		out[name] = drm.Property{ID: d.propID(name), Value: v}
@@ -197,11 +224,15 @@ func (d *fakeDevice) Properties(id, _ uint32) (map[string]drm.Property, error) {
 }
 
 func (d *fakeDevice) PropertyInfo(id uint32) (drm.PropertyInfo, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	name := d.propName(id)
 	return drm.PropertyInfo{Name: name, Enums: enums[name]}, nil
 }
 
 func (d *fakeDevice) Blob(id uint32) ([]byte, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	b, ok := d.blobs[id]
 	if !ok {
 		return nil, unix.ENOENT
@@ -210,6 +241,8 @@ func (d *fakeDevice) Blob(id uint32) ([]byte, error) {
 }
 
 func (d *fakeDevice) CreateBlob(data []byte) (uint32, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	id := d.id()
 	d.blobs[id] = slices.Clone(data)
 	d.created[id] = d.blobs[id]
@@ -217,6 +250,8 @@ func (d *fakeDevice) CreateBlob(data []byte) (uint32, error) {
 }
 
 func (d *fakeDevice) DestroyBlob(id uint32) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if _, ok := d.blobs[id]; !ok {
 		return unix.ENOENT
 	}
@@ -225,27 +260,40 @@ func (d *fakeDevice) DestroyBlob(id uint32) error {
 }
 
 func (d *fakeDevice) CreateDumb(size image.Point) (drm.Dumb, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.onDumb != nil {
+		d.onDumb()
+	}
 	return drm.Dumb{Handle: d.id(), Pitch: uint32(size.X * 4), Pix: make([]byte, size.X*size.Y*4)}, nil
 }
 
 func (d *fakeDevice) DestroyDumb(drm.Dumb) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.destroyed++
 	return nil
 }
 
 func (d *fakeDevice) AddFB2(fb drm.FB) (uint32, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	id := d.id()
 	d.fbs[id] = fb
 	return id, nil
 }
 
 func (d *fakeDevice) RemoveFB(id uint32) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	delete(d.fbs, id)
 	d.removed = append(d.removed, id)
 	return nil
 }
 
 func (d *fakeDevice) CloseFB(id uint32) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	delete(d.fbs, id)
 	d.closedFBs = append(d.closedFBs, id)
 	return nil
@@ -255,6 +303,8 @@ func (d *fakeDevice) Commit(r *drm.Request, flags uint32, user uint64) error {
 	if d.forget {
 		return nil
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.refuse != nil {
 		if err := d.refuse(flags); err != nil {
 			return err
@@ -278,5 +328,27 @@ func (d *fakeDevice) Commit(r *drm.Request, flags uint32, user uint64) error {
 }
 
 func (d *fakeDevice) real() []commit {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	return slices.DeleteFunc(slices.Clone(d.commits), func(c commit) bool { return c.flags&drm.AtomicTestOnly != 0 })
+}
+
+func (d *fakeDevice) setMasterErr(err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.masterErr = err
+}
+
+func (d *fakeDevice) isClosed() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.closed
+}
+
+// Rescan is a probe and what the loop and the worker do with its result, for
+// tests of a card alone.
+func (c *Card) Rescan() error {
+	r := c.probe()
+	c.apply(r)
+	return errors.Join(r.err, c.releaseRetired(r.dropped))
 }

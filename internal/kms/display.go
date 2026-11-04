@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
-	"time"
 
 	"github.com/stubbedev/lys-lib/drm"
 	"golang.org/x/sys/unix"
@@ -26,14 +26,6 @@ var firmwareDrivers = []string{"simple-framebuffer", "efi-framebuffer", "vesa-fr
 // oopses the kernel and the machine never reaches the reset.
 var driversRemovedWithClients = []string{"nvidia"}
 
-// A card another process is master of is tried again this often for this
-// long: a display manager's service can stop before the compositor in its
-// session lets the card go.
-const (
-	busyRetryEvery = 20 * time.Millisecond
-	busyRetryFor   = 10 * time.Second
-)
-
 // Paths are where the display finds card nodes and their sysfs entries.
 type Paths struct {
 	Dev   string
@@ -44,32 +36,35 @@ type Paths struct {
 var SystemPaths = Paths{Dev: "/dev/dri", Sysfs: "/sys/class/drm"}
 
 // Event is something that happened to the display: a card's page flip, a
-// uevent, a reader failing, or the time to try a busy card again.
+// uevent, something failing off the loop, or a card worker's result.
 // Display.Handle applies it.
 type Event struct {
 	card   *Card
 	flip   drm.FlipEvent
 	uevent []byte
 	err    error
-	busy   string
-	until  time.Time
+	lit    *litCard
+	scan   *scanResult
 }
 
 // Display is every DRM card's outputs. It is not safe for concurrent use:
-// one goroutine opens it, handles its events and draws.
+// one goroutine opens it, handles its events and draws, while a worker per card
+// does whatever could keep that goroutine waiting.
 type Display struct {
-	paths   Paths
-	open    func(path string) (device, error)
-	log     *slog.Logger
-	scaler  Scaler
-	cards   map[string]*Card
-	readers map[*Card]*os.File
-	events  chan Event
-	done    chan struct{}
-	wg      sync.WaitGroup
-	uevents *ueventSocket
-	paused  bool
-	outs    []*Output
+	paths       Paths
+	open        func(path string) (device, error)
+	log         *slog.Logger
+	clock       clock
+	scaler      Scaler
+	cards       map[string]*Card
+	workers     map[string]*cardWorker
+	events      chan Event
+	done        chan struct{}
+	wg          sync.WaitGroup
+	workersDone sync.WaitGroup
+	uevents     *ueventSocket
+	paused      bool
+	outs        []*Output
 }
 
 // Open opens every card under paths and lights its outputs, then follows
@@ -78,16 +73,17 @@ type Display struct {
 // for a while; with none at all, Outputs is empty and the splash has no
 // graphical output.
 func Open(paths Paths, log *slog.Logger) (*Display, error) {
-	return open(paths, func(path string) (device, error) { return drm.Open(path) }, true, log)
+	return open(paths, func(path string) (device, error) { return drm.Open(path) }, true, systemClock, log)
 }
 
-func open(paths Paths, opener func(string) (device, error), uevents bool, log *slog.Logger) (*Display, error) {
+func open(paths Paths, opener func(string) (device, error), uevents bool, clk clock, log *slog.Logger) (*Display, error) {
 	d := &Display{
 		paths:   paths,
 		open:    opener,
 		log:     log,
+		clock:   clk,
 		cards:   map[string]*Card{},
-		readers: map[*Card]*os.File{},
+		workers: map[string]*cardWorker{},
 		events:  make(chan Event, 16),
 		done:    make(chan struct{}),
 	}
@@ -105,7 +101,7 @@ func open(paths Paths, opener func(string) (device, error), uevents bool, log *s
 	}
 	for _, e := range entries {
 		if isCard(e.Name()) {
-			d.add(e.Name())
+			d.lightNow(e.Name())
 		}
 	}
 	return d, nil
@@ -153,57 +149,32 @@ func (p Paths) ClientsMustCloseBeforeRemoval() (bool, error) {
 	return false, nil
 }
 
-func (d *Display) add(name string) {
-	d.light(name, time.Now().Add(busyRetryFor))
-}
-
-func (d *Display) light(name string, until time.Time) {
-	if _, ok := d.cards[name]; ok {
+// lightNow lights a card before the loop runs, so the first frame shows on it:
+// nothing is waiting yet. A card another master holds goes on in its worker.
+func (d *Display) lightNow(name string) {
+	w := d.newWorker(name)
+	w.lighting, w.until, w.wait = true, d.clock.now().Add(busyRetryFor), firstBusyRetry
+	lit := w.attempt(false, 0)
+	d.workersDone.Go(w.run)
+	if lit == nil {
 		return
 	}
-	err := d.tryAdd(name)
-	if err == nil {
-		return
-	}
-	if errors.Is(err, unix.EBUSY) && !d.paused && time.Now().Before(until) {
-		d.wg.Go(func() { d.retryBusy(name, until) })
-		return
-	}
-	d.log.Warn("lighting a card", "card", name, "err", err)
-}
-
-func (d *Display) retryBusy(name string, until time.Time) {
-	select {
-	case <-time.After(busyRetryEvery):
-		d.send(Event{busy: name, until: until})
-	case <-d.done:
+	if err := d.take(lit); err != nil {
+		d.log.Warn("lighting a card", "card", name, "err", err)
 	}
 }
 
-func (d *Display) tryAdd(name string) error {
-	firmware, err := d.firmware(name)
-	if err != nil {
-		return err
-	}
-	dev, err := d.open(filepath.Join(d.paths.Dev, name))
-	if err != nil {
-		return err
-	}
-	c, err := openCard(dev, name, firmware, &d.scaler, d.log)
-	if err != nil {
-		return errors.Join(err, dev.Close())
-	}
-	r, err := eventReader(dev.FD(), dev.Path())
-	if err != nil {
-		return errors.Join(err, dev.Close())
-	}
-	d.cards[name] = c
-	d.readers[c] = r
-	d.wg.Go(func() { d.readFlips(c, r) })
+// take brings a card its worker opened into the display.
+func (d *Display) take(lit *litCard) error {
+	c := lit.card
+	d.cards[c.name] = c
+	d.wg.Go(func() { d.readFlips(c, lit.reader) })
+	c.apply(lit.scan)
+	d.outs = nil
 	if d.paused {
-		return c.Deactivate()
+		return errors.Join(lit.scan.err, c.Deactivate())
 	}
-	return c.Rescan()
+	return lit.scan.err
 }
 
 func eventReader(fd int, path string) (*os.File, error) {
@@ -274,23 +245,22 @@ func (d *Display) Events() <-chan Event {
 }
 
 // Handle applies e and says whether Outputs changed: a flip lets its output
-// show the next frame, a card that appears is opened and lit, one that
-// disappears is dropped, a hotplug rescans its card's connectors and a busy
-// card is tried again.
+// show the next frame, a card that disappears is dropped at once, and what takes
+// time, a card appearing or a hotplug, goes to the card's worker, whose result
+// is another Event.
 func (d *Display) Handle(e Event) (bool, error) {
 	switch {
 	case e.err != nil:
 		return false, e.err
 	case e.uevent != nil:
-		before := d.Outputs()
-		err := d.uevent(e.uevent)
-		d.outs = nil
-		return !slices.Equal(before, d.Outputs()), err
-	case e.busy != "":
-		before := d.Outputs()
-		d.light(e.busy, e.until)
-		d.outs = nil
-		return !slices.Equal(before, d.Outputs()), nil
+		return d.uevent(e.uevent)
+	case e.lit != nil:
+		if e.lit.gen != d.workers[e.lit.card.name].gen {
+			return false, nil
+		}
+		return true, d.take(e.lit)
+	case e.scan != nil:
+		return d.scanned(e.scan)
 	case e.card != nil:
 		if d.cards[e.card.name] != e.card {
 			return false, nil
@@ -300,45 +270,56 @@ func (d *Display) Handle(e Event) (bool, error) {
 	return false, nil
 }
 
-func (d *Display) uevent(msg []byte) error {
+func (d *Display) scanned(r *scanResult) (bool, error) {
+	if d.cards[r.card.name] != r.card {
+		return false, nil
+	}
+	r.card.apply(*r)
+	d.outs = nil
+	if len(r.dropped) > 0 {
+		dropped := r.dropped
+		d.workers[r.card.name].ask(func(j *cardJobs) { j.retired = append(j.retired, dropped...) })
+	}
+	return len(r.added)+len(r.dropped) > 0, r.err
+}
+
+func (d *Display) uevent(msg []byte) (bool, error) {
 	u, err := ParseUevent(msg)
 	if errors.Is(err, errUdevMessage) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	name, ok := u.Card()
 	if !ok {
-		return nil
+		return false, nil
 	}
 	switch u.Action {
 	case Add:
-		d.add(name)
+		until := d.clock.now().Add(busyRetryFor)
+		d.worker(name).ask(func(j *cardJobs) { j.open, j.until = true, until })
 	case Remove:
-		return d.remove(name)
+		return d.remove(name), nil
 	case Change:
-		if c, ok := d.cards[name]; ok && u.Hotplug && !d.paused {
-			return c.Rescan()
+		if _, ok := d.cards[name]; ok && u.Hotplug && !d.paused {
+			d.worker(name).ask(func(j *cardJobs) { j.rescan = true })
 		}
 	}
-	return nil
+	return false, nil
 }
 
-func (d *Display) remove(name string) error {
-	c, ok := d.cards[name]
-	if !ok {
-		return nil
+// remove forgets a card at once, so nothing more is drawn on it, and leaves its
+// worker to free it. A card still being lit is told apart by the generation.
+func (d *Display) remove(name string) bool {
+	d.worker(name).removed()
+	if _, ok := d.cards[name]; !ok {
+		return false
 	}
 	delete(d.cards, name)
+	d.outs = nil
 	d.log.Info("a card went away", "card", name)
-	return d.closeCard(c, false)
-}
-
-func (d *Display) closeCard(c *Card, retain bool) error {
-	r := d.readers[c]
-	delete(d.readers, c)
-	return errors.Join(r.Close(), c.Release(retain), c.dev.Close())
+	return true
 }
 
 // Outputs are every lit output, ordered by card and connector. The list is
@@ -367,6 +348,9 @@ func (d *Display) sortedCards() []*Card {
 // cards that appear meanwhile are opened deactivated.
 func (d *Display) Deactivate() error {
 	d.paused = true
+	for _, w := range d.workers {
+		w.setPaused(true)
+	}
 	var errs []error
 	for _, c := range d.sortedCards() {
 		errs = append(errs, c.Deactivate())
@@ -377,11 +361,16 @@ func (d *Display) Deactivate() error {
 // Reactivate takes DRM master back on every card and shows the splash again.
 func (d *Display) Reactivate() error {
 	d.paused = false
+	for _, w := range d.workers {
+		w.setPaused(false)
+	}
 	var errs []error
 	for _, c := range d.sortedCards() {
-		errs = append(errs, c.Reactivate(), c.Rescan())
+		errs = append(errs, c.Reactivate())
 	}
-	d.outs = nil
+	for _, w := range d.workers {
+		w.ask(func(j *cardJobs) { j.rescan = true })
+	}
 	return errors.Join(errs...)
 }
 
@@ -389,12 +378,14 @@ func (d *Display) Reactivate() error {
 // frames on screen stay there after the process exits (see Card.Release).
 func (d *Display) Close(retain bool) error {
 	close(d.done)
+	d.workersDone.Wait()
 	var errs []error
 	if d.uevents != nil {
 		errs = append(errs, d.uevents.close())
 	}
-	for _, c := range d.sortedCards() {
-		errs = append(errs, d.closeCard(c, retain))
+	names := slices.Sorted(maps.Keys(d.workers))
+	for _, name := range names {
+		errs = append(errs, d.workers[name].closeCard(retain))
 	}
 	clear(d.cards)
 	d.outs = nil
