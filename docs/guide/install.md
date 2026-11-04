@@ -46,7 +46,7 @@ Nix; the machine it is built on can be another one.
 ```sh
 nix build github:stubbedev/lys-splash#default.compat
 sudo apt-get remove plymouth
-sudo cp -a --no-preserve=ownership result-compat/. /usr/
+sudo cp -dRf result-compat/. /usr/
 sudo systemctl enable lys-splash-start.service lys-splash-quit.service \
   lys-splash-quit-wait.service lys-splash-read-write.service \
   lys-splash-ask-password.path lys-splash-reboot.service \

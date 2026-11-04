@@ -15,7 +15,7 @@ docker run --rm -v "$compat:/compat:ro" "$image" bash -euo pipefail -c '
     echo "plymouth is installed alongside lys-splash" >&2
     exit 1
   fi
-  cp -a --no-preserve=ownership /compat/. /usr/
+  cp -dRf /compat/. /usr/
   kernel=$(ls /lib/modules | head -n1)
   mkinitramfs -o /tmp/initrd.img "$kernel"
   lsinitramfs /tmp/initrd.img > /tmp/files
