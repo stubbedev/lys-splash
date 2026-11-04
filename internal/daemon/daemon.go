@@ -141,8 +141,10 @@ type Config struct {
 	SaveBootDuration func(path string, d time.Duration) error
 	// LoadTheme reads the theme Reload shows.
 	LoadTheme func(path string) (theme.Theme, error)
-	Clock     Clock
-	Log       *slog.Logger
+	// RasterizeLogo draws the logo for a scale off the loop.
+	RasterizeLogo func(scale int) (*theme.LogoRaster, error)
+	Clock         Clock
+	Log           *slog.Logger
 	// started hands a test the daemon as Run makes it.
 	started func(*daemon)
 }
@@ -150,6 +152,13 @@ type Config struct {
 // previousBoot is what reading the previous boot's duration found.
 type previousBoot struct {
 	total time.Duration
+	err   error
+}
+
+// rasterizedLogo is the logo for a scale, ready or failed.
+type rasterizedLogo struct {
+	scale int
+	logo  *theme.LogoRaster
 	err   error
 }
 
@@ -176,6 +185,7 @@ type event struct {
 	output   []byte
 	previous *previousBoot
 	theme    *themeLoad
+	logo     *rasterizedLogo
 }
 
 type daemon struct {
@@ -210,6 +220,11 @@ type daemon struct {
 	// reloads wait for the next theme load, reloading says one is running.
 	reloads   []*server.Call
 	reloading bool
+	// looping says the frame loop runs, so a logo is rasterized off it; logos
+	// are the scales asked for since the renderer changed, true while one is on
+	// its way and false once it failed.
+	looping bool
+	logos   map[int]bool
 	// The timer is armed for the next change of the picture, counted from
 	// phaseAt, the start of the phase showing, or for retryAt, the first retry
 	// of a failing screen. ticking says the animation is running and rearm that
@@ -366,6 +381,7 @@ func (d *daemon) step() {
 
 func (d *daemon) loop(ctx context.Context) error {
 	defer d.timer.Stop()
+	d.looping = true
 	for {
 		var reply func() error
 		var err error
@@ -387,6 +403,8 @@ func (d *daemon) loop(ctx context.Context) error {
 				d.previousLoaded(e.previous)
 			case e.theme != nil:
 				reply, err = d.themeLoaded(e.theme)
+			case e.logo != nil:
+				err = d.logoRasterized(e.logo)
 			default:
 				err = d.typed(e.keys)
 			}
@@ -652,11 +670,70 @@ func (d *daemon) reload(c *server.Call) {
 func (d *daemon) loadTheme() {
 	calls := d.reloads
 	d.reloads, d.reloading = nil, true
+	scales := d.scales()
 	go func() {
 		t, err := d.cfg.LoadTheme(d.cfg.ThemePath)
 		r, rerr := theme.NewRenderer(t, d.bgrt)
+		if rerr == nil {
+			for _, scale := range scales {
+				if !r.NeedsLogo(scale) {
+					continue
+				}
+				logo, lerr := d.cfg.RasterizeLogo(scale)
+				if lerr != nil {
+					err = errors.Join(err, lerr)
+					continue
+				}
+				r.AddLogo(logo)
+			}
+		}
 		d.post(event{theme: &themeLoad{calls: calls, renderer: r, units: t.Units, err: errors.Join(err, rerr)}})
 	}()
+}
+
+// scales are the scales of the screens now.
+func (d *daemon) scales() []int {
+	var scales []int
+	for _, s := range d.display.Screens() {
+		if scale := s.Scale(); !slices.Contains(scales, scale) {
+			scales = append(scales, scale)
+		}
+	}
+	return scales
+}
+
+// logoReady says a screen at scale can be drawn whole now. Otherwise the logo is
+// on its way, and the screen shows nothing rather than half a frame until it comes,
+// milliseconds later: a screen just lit has shown nothing yet. A logo that failed
+// is left to Draw, which reports it.
+func (d *daemon) logoReady(scale int) bool {
+	if !d.looping || !d.renderer.NeedsLogo(scale) {
+		return true
+	}
+	pending, asked := d.logos[scale]
+	if asked {
+		return !pending
+	}
+	if d.logos == nil {
+		d.logos = map[int]bool{}
+	}
+	d.logos[scale] = true
+	go func() {
+		logo, err := d.cfg.RasterizeLogo(scale)
+		d.post(event{logo: &rasterizedLogo{scale: scale, logo: logo, err: err}})
+	}()
+	return false
+}
+
+func (d *daemon) logoRasterized(l *rasterizedLogo) error {
+	d.stale = true
+	if l.err != nil {
+		d.logos[l.scale] = false
+		return l.err
+	}
+	delete(d.logos, l.scale)
+	d.renderer.AddLogo(l.logo)
+	return nil
 }
 
 func (d *daemon) themeLoaded(l *themeLoad) (func() error, error) {
@@ -710,6 +787,9 @@ func (d *daemon) redraw() error {
 }
 
 func (d *daemon) drawScreen(s Screen) error {
+	if !d.logoReady(s.Scale()) {
+		return nil
+	}
 	shown, known := d.drawn[s]
 	if shown.wait > 0 && d.cfg.Clock.Now().Before(shown.retryAt) {
 		return nil

@@ -288,15 +288,46 @@ func (r *Renderer) logo(cv *render.Canvas, l layout) error {
 	}
 	icon, ok := r.logos[l.scale]
 	if !ok {
-		n := lysLogoSize * l.scale
-		var err error
-		if icon, err = render.LoadSVG(lysSVG, n, n); err != nil {
-			return fmt.Errorf("theme: rasterize the lys logo at %dpx: %w", n, err)
+		logo, err := RasterizeLogo(l.scale)
+		if err != nil {
+			return err
 		}
-		r.logos[l.scale] = icon
+		r.AddLogo(logo)
+		icon = logo.icon
 	}
 	icon.Draw(cv, l.logo.Min.X, l.logo.Min.Y)
 	return nil
+}
+
+// LogoRaster is the lys logo rasterized for a scale.
+type LogoRaster struct {
+	scale int
+	icon  *render.Icon
+}
+
+// RasterizeLogo draws the lys logo at scale, milliseconds of work that does not
+// belong on the frame loop and needs no Renderer.
+func RasterizeLogo(scale int) (*LogoRaster, error) {
+	n := lysLogoSize * scale
+	icon, err := render.LoadSVG(lysSVG, n, n)
+	if err != nil {
+		return nil, fmt.Errorf("theme: rasterize the lys logo at %dpx: %w", n, err)
+	}
+	return &LogoRaster{scale: scale, icon: icon}, nil
+}
+
+// NeedsLogo says a first frame at scale would rasterize the logo.
+func (r *Renderer) NeedsLogo(scale int) bool {
+	if r.bgrt != nil {
+		return false
+	}
+	_, ok := r.logos[scale]
+	return !ok
+}
+
+// AddLogo keeps a logo for the frames at its scale.
+func (r *Renderer) AddLogo(l *LogoRaster) {
+	r.logos[l.scale] = l.icon
 }
 
 func mix(a, b render.Color, num, denom uint32) render.Color {

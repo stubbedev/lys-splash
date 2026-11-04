@@ -277,7 +277,7 @@ func start(t *testing.T, s setup) *run {
 		loadTheme = func(string) (theme.Theme, error) { return theme.Default(), nil }
 	}
 	started := make(chan *daemon, 1)
-	cfg := Config{started: func(d *daemon) { started <- d }, Mode: s.mode, Server: listen(t, r.socket), Chroot: chroot, BootDuration: r.duration, LoadBootDuration: load, SaveBootDuration: save, LoadTheme: loadTheme, Clock: SystemClock{}, Log: log}
+	cfg := Config{started: func(d *daemon) { started <- d }, Mode: s.mode, Server: listen(t, r.socket), Chroot: chroot, BootDuration: r.duration, LoadBootDuration: load, SaveBootDuration: save, LoadTheme: loadTheme, RasterizeLogo: theme.RasterizeLogo, Clock: SystemClock{}, Log: log}
 	go func() {
 		r.done <- Run(ctx, cfg, theme.Default(), nil, Devices{Display: r.display, VT: vt, Console: r.console})
 	}()
@@ -539,7 +539,7 @@ func TestPanicRestoresTheVT(t *testing.T) {
 	display.screens = []Screen{newScreen(image.Pt(64, 64))}
 	vt := newVT()
 	socket := "@lys-splash-daemon-test-" + rand.Text()
-	cfg := Config{Server: listen(t, socket), Chroot: func(string) error { return nil }, LoadBootDuration: LoadBootDuration, Clock: SystemClock{}, Log: slog.New(slog.DiscardHandler)}
+	cfg := Config{Server: listen(t, socket), Chroot: func(string) error { return nil }, LoadBootDuration: LoadBootDuration, RasterizeLogo: theme.RasterizeLogo, Clock: SystemClock{}, Log: slog.New(slog.DiscardHandler)}
 	panicked := make(chan any, 1)
 	go func() {
 		defer func() { panicked <- recover() }()

@@ -313,6 +313,7 @@ func serve(o options, base *slog.Logger) (err error) {
 		LoadBootDuration: daemon.LoadBootDuration,
 		SaveBootDuration: daemon.SaveBootDuration,
 		LoadTheme:        theme.Load,
+		RasterizeLogo:    theme.RasterizeLogo,
 		Clock:            daemon.SystemClock{},
 		Log:              log,
 	}

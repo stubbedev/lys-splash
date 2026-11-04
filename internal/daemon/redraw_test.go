@@ -41,7 +41,7 @@ func newQuietDaemon(t *testing.T, th theme.Theme) (*daemon, *quietScreen) {
 		t.Fatal(err)
 	}
 	d := &daemon{
-		cfg:      Config{Clock: SystemClock{}, Log: slog.New(slog.DiscardHandler)},
+		cfg:      Config{RasterizeLogo: theme.RasterizeLogo, Clock: SystemClock{}, Log: slog.New(slog.DiscardHandler)},
 		display:  &fakeDisplay{screens: []Screen{s}},
 		renderer: r,
 		drawn:    map[Screen]drawnScreen{},
@@ -103,7 +103,7 @@ func TestAFlipDrawsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := &daemon{
-		cfg:      Config{Clock: SystemClock{}, Log: slog.New(slog.DiscardHandler)},
+		cfg:      Config{RasterizeLogo: theme.RasterizeLogo, Clock: SystemClock{}, Log: slog.New(slog.DiscardHandler)},
 		display:  display,
 		renderer: r,
 		drawn:    map[Screen]drawnScreen{},
@@ -210,7 +210,7 @@ func TestTheLoopWakesOnlyForAPictureThatChanges(t *testing.T) {
 			size := image.Pt(320, 240)
 			s := &quietScreen{frame: kms.Frame{Pix: make([]byte, size.X*size.Y*kms.BytesPerPixel), Stride: size.X * kms.BytesPerPixel, Size: size}}
 			d := &daemon{
-				cfg:      Config{Clock: clock, Log: slog.New(slog.DiscardHandler)},
+				cfg:      Config{RasterizeLogo: theme.RasterizeLogo, Clock: clock, Log: slog.New(slog.DiscardHandler)},
 				display:  &fakeDisplay{screens: []Screen{s}},
 				renderer: r,
 				drawn:    map[Screen]drawnScreen{},
@@ -283,11 +283,16 @@ func TestAFailingScreenBacksOffAndLogsOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 			size := image.Pt(320, 240)
+			logo, err := theme.RasterizeLogo(1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.AddLogo(logo)
 			s := &failingScreen{err: errors.New("commit refused")}
 			s.frame = kms.Frame{Pix: make([]byte, size.X*size.Y*kms.BytesPerPixel), Stride: size.X * kms.BytesPerPixel, Size: size}
 			var records atomic.Int32
 			d := &daemon{
-				cfg:      Config{Clock: clock, Log: slog.New(countingHandler{slog.DiscardHandler, &records})},
+				cfg:      Config{RasterizeLogo: theme.RasterizeLogo, Clock: clock, Log: slog.New(countingHandler{slog.DiscardHandler, &records})},
 				display:  &fakeDisplay{screens: []Screen{s}},
 				renderer: r,
 				drawn:    map[Screen]drawnScreen{},
@@ -359,4 +364,99 @@ func TestAFrameBackOffEndsWhenAPresentSucceeds(t *testing.T) {
 	if err := d.redraw(); err != nil || failing.presents != first+2 {
 		t.Errorf("an unchanged state after recovering: %v, %d presents", err, failing.presents)
 	}
+}
+
+type scaledScreen struct {
+	quietScreen
+	scale int
+}
+
+func (s *scaledScreen) Scale() int { return s.scale }
+
+func TestALogoIsRasterizedOffTheLoopAndTheScreenWaitsForIt(t *testing.T) {
+	size := image.Pt(1920, 1080)
+	frame := func() kms.Frame {
+		return kms.Frame{Pix: make([]byte, size.X*size.Y*kms.BytesPerPixel), Stride: size.X * kms.BytesPerPixel, Size: size}
+	}
+	first := &quietScreen{frame: frame()}
+	later := &scaledScreen{scale: 2}
+	later.frame = frame()
+	display := &fakeDisplay{screens: []Screen{first}}
+	r, err := theme.NewRenderer(theme.Default(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loop := goroutineID()
+	var onLoop atomic.Int32
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	clock := newFakeClock()
+	d := &daemon{
+		cfg: Config{Clock: clock, Log: slog.New(slog.DiscardHandler), RasterizeLogo: func(scale int) (*theme.LogoRaster, error) {
+			if goroutineID() == loop {
+				onLoop.Add(1)
+			}
+			entered <- struct{}{}
+			<-release
+			return theme.RasterizeLogo(scale)
+		}},
+		display:  display,
+		renderer: r,
+		drawn:    map[Screen]drawnScreen{},
+		inbox:    make(chan event, 4),
+		done:     make(chan struct{}),
+		timer:    clock,
+		started:  clock.Now(),
+		looping:  true,
+	}
+	d.logos = map[int]bool{}
+	logo, err := theme.RasterizeLogo(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.AddLogo(logo)
+	if err := d.redraw(); err != nil {
+		t.Fatal(err)
+	}
+	display.screens = []Screen{first, later}
+	d.stale = true
+	if err := d.redraw(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the logo was never rasterized")
+	}
+	if later.presents != 0 {
+		t.Errorf("a screen presented %d frames without its logo", later.presents)
+	}
+	before := first.presents
+	for range 3 {
+		d.state.Phase++
+		if err := d.redraw(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := first.presents - before; got != 3 {
+		t.Errorf("the screen with a logo presented %d frames while another waited, want 3", got)
+	}
+	close(release)
+	select {
+	case e := <-d.inbox:
+		if err := d.logoRasterized(e.logo); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the logo never arrived")
+	}
+	if err := d.redraw(); err != nil {
+		t.Fatal(err)
+	}
+	if later.presents != 1 {
+		t.Errorf("the screen presented %d frames once its logo came, want 1", later.presents)
+	}
+	if got := onLoop.Load(); got != 0 {
+		t.Errorf("%d rasters on the loop's goroutine", got)
+	}
+	close(d.done)
 }
