@@ -802,8 +802,9 @@ func TestReloadsDuringALoadShareTheNextOne(t *testing.T) {
 	for i := range later {
 		later[i] = r.dial(t)
 		r.send(t, later[i], protocol.Reload{})
+		r.send(t, later[i], protocol.Ping{})
+		expect(t, later[i], protocol.Ack{})
 	}
-	r.call(t, protocol.Ping{}, protocol.Ack{})
 	release <- struct{}{}
 	expect(t, first, protocol.Ack{})
 	<-entered
