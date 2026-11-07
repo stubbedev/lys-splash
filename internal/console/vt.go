@@ -5,6 +5,7 @@
 package console
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -20,10 +21,12 @@ const (
 	kdGetMode   = 0x4b3b
 	kdGetKBMode = 0x4b44
 	kdSetKBMode = 0x4b45
+	kdGKBLED    = 0x4b64
 
 	kdText     = 0x00
 	kdGraphics = 0x01
 	kUnicode   = 0x03
+	kCapsLock  = 0x04
 )
 
 // Paths are where the VTs are found.
@@ -51,6 +54,7 @@ type terminal interface {
 	Termios() (unix.Termios, error)
 	SetTermios(t unix.Termios) error
 	Winsize() (unix.Winsize, error)
+	LockFlags() (byte, error)
 }
 
 type device struct {
@@ -85,6 +89,17 @@ func (d device) Mode() (int, error)             { return d.ioctlGet(kdGetMode) }
 func (d device) SetMode(mode int) error         { return d.ioctlSet(kdSetMode, mode) }
 func (d device) KeyboardMode() (int, error)     { return d.ioctlGet(kdGetKBMode) }
 func (d device) SetKeyboardMode(mode int) error { return d.ioctlSet(kdSetKBMode, mode) }
+
+func (d device) LockFlags() (byte, error) {
+	var flags uint32
+	err := d.control(func(fd int) (err error) {
+		flags, err = unix.IoctlGetUint32(fd, kdGKBLED)
+		return err
+	})
+	var b [4]byte
+	binary.NativeEndian.PutUint32(b[:], flags)
+	return b[0], err
+}
 
 func (d device) Termios() (t unix.Termios, err error) {
 	err = d.control(func(fd int) error {
@@ -221,6 +236,14 @@ func (v *VT) Rows() (int, error) {
 		return 0, v.fail("read the size", err)
 	}
 	return int(w.Row), nil
+}
+
+func (v *VT) CapsLock() (bool, error) {
+	flags, err := v.t.LockFlags()
+	if err != nil {
+		return false, v.fail("read the keyboard's lock flags", err)
+	}
+	return flags&kCapsLock != 0, nil
 }
 
 // Read reads keyboard input, blocking until there is some.

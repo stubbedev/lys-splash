@@ -28,7 +28,7 @@ with logs_on_failure(text, explained):
     text.succeed("test ! -e /dev/dri/card0", "lys-splash --ping")
     answer = ask(text, "Text password", "hunter2\n")
     assert answer == "hunter2", f"the text fallback's password arrived as {answer!r}"
-    text.succeed("grep -q 'Text password' /dev/vcs1")
+    text.succeed("grep -q 'Text password \\[us\\]' /dev/vcs1")
     text.succeed("echo 'Started Lys Marker Service.' > /dev/console")
     text.sleep(1)
     assert "Lys Marker" not in text.get_console_log(), "the console's output was not captured"
@@ -57,6 +57,27 @@ with logs_on_failure(machine, explained):
     machine.succeed(f"test \"$(readlink /proc/{pid}/root)\" = /")
     machine.succeed("lys-splash --ping", "plymouth --ping", "lys-splash --has-active-vt")
     splash = screenshot(machine, "splash")
+
+    machine.wait_until_succeeds("journalctl -b -u lys-splash-start -g 'msg=\"the console keymap\" keymap=de-latin1'", timeout=seconds(10))
+    machine.succeed("systemd-run --no-ask-password --unit=ask-hints -p StandardOutput=file:/tmp/answer lys-splash ask-for-password --prompt='Hinted password'")
+    machine.wait_until_succeeds("systemctl is-active ask-hints", timeout=seconds(5))
+    prompt = await_screen(machine, "prompt", steady_and(lambda _: None), 10)
+    machine.send_key("caps_lock")
+
+    def caps_hint(shot):
+        box = ImageChops.difference(shot, prompt).getbbox()
+        if box is None:
+            return "the screen shows no Caps Lock hint"
+        if box[1] < prompt.height // 2:
+            return f"Caps Lock changed the screen in {box}, above the prompt"
+        return None
+
+    await_screen(machine, "caps-lock", steady_and(caps_hint), 10)
+    machine.send_key("caps_lock")
+    await_screen(machine, "caps-lock-off", matching(prompt, "the prompt before Caps Lock"), 10)
+    machine.send_chars("x\n")
+    machine.wait_until_fails("systemctl is-active ask-hints", timeout=seconds(10))
+    assert machine.succeed("cat /tmp/answer") == "x", "the hinted prompt's answer did not arrive"
 
     answer = ask(machine, "Disk password", "yz-\n")
     assert answer == "zyß", f"the German layout's password arrived as {answer!r}, want 'zyß'"

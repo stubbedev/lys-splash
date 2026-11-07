@@ -12,6 +12,7 @@ the binary. A field left out keeps the embedded theme's value.
 | `logo` | `firmware`, `lys` | `firmware` | `firmware` shows the firmware's own logo when it left one, else lys's; `lys` always shows lys's |
 | `throbber` | `spinner`, `dots` | `spinner` | The busy animation |
 | `units` | `true`, `false` | `false` | Shows the name of each unit systemd starts under the throbber |
+| `prompt-hints` | `true`, `false` | `true` | Shows "Caps Lock is on" under a prompt and the console keymap beside it |
 
 The background stays black in the embedded theme so the firmware's logo, drawn
 on black, does not change underneath. The logo and the font cannot be replaced
@@ -22,6 +23,11 @@ accent: "#7aa2f7"
 throbber: dots
 units: true
 ```
+
+With `prompt-hints`, a prompt shows the console's keymap beside the entry and
+warns while Caps Lock is on:
+
+![A password prompt with the Caps Lock warning](../../internal/theme/testdata/golden/password-capslock.png)
 
 `throbber: dots` looks like this:
 

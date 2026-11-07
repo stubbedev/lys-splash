@@ -22,19 +22,19 @@ import (
 func TestDefaultParses(t *testing.T) {
 	t.Parallel()
 	d := Default()
-	if d.Background != render.RGB(0, 0, 0) || d.Logo != FirmwareLogo || d.Throbber != Spinner || d.Units {
+	if d.Background != render.RGB(0, 0, 0) || d.Logo != FirmwareLogo || d.Throbber != Spinner || d.Units || !d.PromptHints {
 		t.Errorf("Default() = %+v", d)
 	}
 }
 
 func TestParseOverridesTheDefault(t *testing.T) {
 	t.Parallel()
-	got, err := Parse("theme.yaml", []byte("accent: \"#102030\"\nthrobber: dots\nunits: true\n"))
+	got, err := Parse("theme.yaml", []byte("accent: \"#102030\"\nthrobber: dots\nunits: true\nprompt-hints: false\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Default()
-	want.Accent, want.Throbber, want.Units = render.RGB(0x10, 0x20, 0x30), Dots, true
+	want.Accent, want.Throbber, want.Units, want.PromptHints = render.RGB(0x10, 0x20, 0x30), Dots, true, false
 	if got != want {
 		t.Errorf("Parse = %+v, want %+v", got, want)
 	}
@@ -52,6 +52,7 @@ func TestParseErrorsNameTheField(t *testing.T) {
 		"logo: plymouth\n":            "logo",
 		"throbber: wheel\n":           "throbber",
 		"units: maybe\n":              "units",
+		"prompt-hints: 1\n":           "prompt-hints",
 		"colour: \"#000000\"\n":       "colour",
 		"background: [1, 2]\n":        "background",
 		"logo: lys\nthrobber: none\n": "throbber",
@@ -222,6 +223,8 @@ func TestGoldenFrames(t *testing.T) {
 		{"boot-bgrt", Default(), bgrt, 1, size, State{Phase: 3}},
 		{"boot-dots", dots, nil, 1, size, State{Phase: 14}},
 		{"password", Default(), bgrt, 1, size, State{Prompt: Prompt{Kind: PasswordPrompt, Text: "Please enter passphrase for disk root:", Shown: strings.Repeat("•", 7)}}},
+		{"password-capslock", Default(), nil, 1, size, State{Prompt: Prompt{Kind: PasswordPrompt, Text: "Please enter passphrase for disk root:", Shown: strings.Repeat("•", 3)}, Hints: Hints{CapsLock: true}}},
+		{"password-keymap", Default(), nil, 1, size, State{Prompt: Prompt{Kind: PasswordPrompt, Text: "Please enter passphrase for disk root:", Shown: strings.Repeat("•", 3)}, Hints: Hints{Keymap: "de"}}},
 		{"question", Default(), nil, 1, size, State{Prompt: Prompt{Kind: QuestionPrompt, Text: "Continue booting?", Shown: "yes"}}},
 		{"message", Default(), nil, 1, size, State{Message: "Starting Disk Encryption", Phase: 9}},
 		{"update", Default(), nil, 1, size, State{Updating: true, Progress: 42, Message: "Installing updates"}},
@@ -342,6 +345,10 @@ func TestEveryPartialRedrawMatchesAFullOne(t *testing.T) {
 		{Phase: 8, Prompt: Prompt{Kind: PasswordPrompt, Text: "Passphrase for /dev/sda2:", Shown: "•••"}},
 		{Phase: 8, Prompt: Prompt{Kind: PasswordPrompt, Text: "Passphrase for /dev/sda2:", Shown: strings.Repeat("•", 80)}},
 		{Phase: 8, Prompt: Prompt{Kind: PasswordPrompt, Text: "x"}},
+		{Phase: 8, Prompt: Prompt{Kind: PasswordPrompt, Text: "x"}, Hints: Hints{Keymap: "de-latin1"}},
+		{Phase: 8, Prompt: Prompt{Kind: PasswordPrompt, Text: "x", Shown: "•"}, Hints: Hints{Keymap: "de-latin1", CapsLock: true}},
+		{Phase: 8, Prompt: Prompt{Kind: PasswordPrompt, Text: "x", Shown: "•"}, Hints: Hints{Keymap: "us", CapsLock: false}},
+		{Phase: 8, Hints: Hints{Keymap: "us", CapsLock: true}},
 		{Phase: 8},
 		{Updating: true, Progress: 0},
 		{Updating: true, Progress: 1},
@@ -581,4 +588,32 @@ func TestDamageIsOnlyWhatChanged(t *testing.T) {
 
 func area(r image.Rectangle) int {
 	return r.Dx() * r.Dy()
+}
+
+func TestHintsShowOnlyWithAPromptAndDamageOnlyThemselves(t *testing.T) {
+	t.Parallel()
+	size := image.Pt(800, 600)
+	r := renderer(t, Default(), nil)
+	l := r.layout(size, 1)
+	f := frame(size)
+	prompt := Prompt{Kind: PasswordPrompt, Text: "Disk:", Shown: "••"}
+	off := State{Prompt: prompt, Hints: Hints{Keymap: "de"}}
+	draw(t, r, f, 1, nil, off)
+	on := off
+	on.Hints.CapsLock = true
+	if d := bounds(draw(t, r, f, 1, &off, on)); d.Empty() || !d.In(l.caps) {
+		t.Errorf("Caps Lock coming on damaged %v, want part of the hint line %v", d, l.caps)
+	}
+	if d := bounds(draw(t, r, f, 1, &on, off)); d.Empty() || !d.In(l.caps) {
+		t.Errorf("Caps Lock going off damaged %v, want part of the hint line %v", d, l.caps)
+	}
+	if l.caps.Overlaps(l.entry()) || l.keymap.Overlaps(l.entry()) || l.keymap.Empty() {
+		t.Errorf("the hints at %v and %v overlap the entry %v or have no room", l.caps, l.keymap, l.entry())
+	}
+	blank, hidden := frame(size), frame(size)
+	draw(t, r, blank, 1, nil, State{})
+	draw(t, r, hidden, 1, nil, State{Hints: Hints{Keymap: "de", CapsLock: true}})
+	if !bytes.Equal(blank.Pix, hidden.Pix) {
+		t.Error("the hints show without a prompt")
+	}
 }

@@ -36,6 +36,8 @@ const (
 	lastPresentRetry  = 2 * time.Second
 )
 
+const capsLockPoll = 250 * time.Millisecond
+
 // Screen is one output the splash draws on.
 type Screen interface {
 	Frame() kms.Frame
@@ -61,6 +63,7 @@ type Terminal interface {
 	Text() error
 	Rows() (int, error)
 	Reclaim() error
+	CapsLock() (bool, error)
 	Read(b []byte) (int, error)
 	Write(b []byte) (int, error)
 	Restore() error
@@ -143,6 +146,7 @@ type Config struct {
 	LoadTheme func(path string) (theme.Theme, error)
 	// RasterizeLogo draws the logo for a scale off the loop.
 	RasterizeLogo func(scale int) (*theme.LogoRaster, error)
+	LoadKeymap    func() (string, error)
 	Clock         Clock
 	Log           *slog.Logger
 	// started hands a test the daemon as Run makes it.
@@ -167,6 +171,7 @@ type themeLoad struct {
 	calls    []*server.Call
 	renderer *theme.Renderer
 	units    bool
+	hints    bool
 	err      error
 }
 
@@ -186,6 +191,13 @@ type event struct {
 	previous *previousBoot
 	theme    *themeLoad
 	logo     *rasterizedLogo
+	keymap   *keymapLoad
+}
+
+type keymapLoad struct {
+	serial uint64
+	name   string
+	err    error
 }
 
 type daemon struct {
@@ -199,6 +211,9 @@ type daemon struct {
 	bgrt     *theme.BGRT
 	renderer *theme.Renderer
 	units    bool
+	hints    bool
+	keymap   string
+	keymaps  uint64
 	state    theme.State
 	screens  []Screen
 	drawn    map[Screen]drawnScreen
@@ -229,11 +244,13 @@ type daemon struct {
 	// phaseAt, the start of the phase showing, or for retryAt, the first retry
 	// of a failing screen. ticking says the animation is running and rearm that
 	// the deadline has to be worked out again.
-	timer   Timer
-	phaseAt time.Time
-	retryAt time.Time
-	ticking bool
-	rearm   bool
+	timer       Timer
+	phaseAt     time.Time
+	retryAt     time.Time
+	ticking     bool
+	rearm       bool
+	capsWatched bool
+	capsAt      time.Time
 }
 
 // Run serves the splash until a quit request or ctx ends. ctx ending is a
@@ -254,6 +271,7 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, dev D
 		bgrt:     bgrt,
 		renderer: r,
 		units:    t.Units,
+		hints:    t.PromptHints,
 		drawn:    map[Screen]drawnScreen{},
 		inbox:    make(chan event, 16),
 		done:     make(chan struct{}),
@@ -267,6 +285,7 @@ func Run(ctx context.Context, cfg Config, t theme.Theme, bgrt *theme.BGRT, dev D
 	if cfg.Mode == Boot {
 		d.loadPrevious()
 	}
+	d.loadKeymap()
 	defer func() {
 		if !d.quitted {
 			err = errors.Join(err, d.quit(false), d.recordDuration())
@@ -329,7 +348,7 @@ func (d *daemon) tick() <-chan time.Time {
 			d.phaseAt = d.cfg.Clock.Now()
 		}
 	}
-	if !animating && d.retryAt.IsZero() {
+	if !animating && d.retryAt.IsZero() && d.capsAt.IsZero() {
 		if d.rearm {
 			d.rearm = false
 			d.timer.Stop()
@@ -345,6 +364,9 @@ func (d *daemon) tick() <-chan time.Time {
 
 func (d *daemon) untilNextChange() time.Duration {
 	next := d.retryAt
+	if !d.capsAt.IsZero() {
+		next = earliest(next, d.capsAt)
+	}
 	if d.ticking {
 		next = earliest(next, d.phaseAt.Add(time.Duration(d.renderer.PhasesToNextPicture(d.state.Phase))*FrameInterval))
 		if d.previous > 0 && d.state.Progress < protocol.MaxPercent-1 {
@@ -385,6 +407,7 @@ func (d *daemon) loop(ctx context.Context) error {
 	for {
 		var reply func() error
 		var err error
+		typed := false
 		select {
 		case <-ctx.Done():
 			return errors.Join(d.quit(d.cfg.Mode.stopping()), d.recordDuration())
@@ -405,7 +428,10 @@ func (d *daemon) loop(ctx context.Context) error {
 				reply, err = d.themeLoaded(e.theme)
 			case e.logo != nil:
 				err = d.logoRasterized(e.logo)
+			case e.keymap != nil:
+				d.keymapLoaded(e.keymap)
 			default:
+				typed = true
 				err = d.typed(e.keys)
 			}
 			d.state.Prompt = d.asker.Prompt()
@@ -420,6 +446,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		case <-d.tick():
 			d.step()
 		}
+		d.followCapsLock(typed)
 		if d.stale || d.state != d.settled {
 			err = errors.Join(err, d.redraw())
 		}
@@ -587,6 +614,7 @@ func (d *daemon) request(c *server.Call) (func() error, error) {
 		if d.cfg.Mode == Boot && d.previous == 0 {
 			d.loadPrevious()
 		}
+		d.loadKeymap()
 		return answer(protocol.Ack{}), nil
 	}
 	return answer(protocol.Ack{}), d.apply(c.Request)
@@ -631,6 +659,7 @@ func (d *daemon) apply(req protocol.Request) error {
 		return d.asker.Ignore(r.Keys)
 	case protocol.SystemInitialized:
 		d.writable = true
+		d.loadKeymap()
 		return d.reclaim()
 	case protocol.Error:
 		d.cfg.Log.Warn("the boot reported an error")
@@ -687,7 +716,7 @@ func (d *daemon) loadTheme() {
 				r.AddLogo(logo)
 			}
 		}
-		d.post(event{theme: &themeLoad{calls: calls, renderer: r, units: t.Units, err: errors.Join(err, rerr)}})
+		d.post(event{theme: &themeLoad{calls: calls, renderer: r, units: t.Units, hints: t.PromptHints, err: errors.Join(err, rerr)}})
 	}()
 }
 
@@ -742,7 +771,8 @@ func (d *daemon) themeLoaded(l *themeLoad) (func() error, error) {
 		d.loadTheme()
 	}
 	if l.renderer != nil {
-		d.renderer, d.units, d.rearm = l.renderer, l.units, true
+		d.renderer, d.units, d.hints, d.rearm = l.renderer, l.units, l.hints, true
+		d.showKeymap()
 		clear(d.drawn)
 		d.shown, d.stale = nil, true
 	}
@@ -911,4 +941,57 @@ func (d *daemon) recordDuration() error {
 		return nil
 	}
 	return d.cfg.SaveBootDuration(d.cfg.BootDuration, d.cfg.Clock.Now().Sub(d.started))
+}
+
+func (d *daemon) loadKeymap() {
+	d.keymaps++
+	serial := d.keymaps
+	go func() {
+		name, err := d.cfg.LoadKeymap()
+		d.post(event{keymap: &keymapLoad{serial: serial, name: name, err: err}})
+	}()
+}
+
+func (d *daemon) keymapLoaded(k *keymapLoad) {
+	if k.serial != d.keymaps {
+		return
+	}
+	if k.err != nil {
+		d.cfg.Log.Warn("showing no console keymap", "err", k.err)
+	} else if k.name == "" {
+		return
+	}
+	if k.name != d.keymap {
+		d.cfg.Log.Info("the console keymap", "keymap", k.name)
+	}
+	d.keymap = k.name
+	d.showKeymap()
+}
+
+func (d *daemon) showKeymap() {
+	d.state.Hints.Keymap = ""
+	if d.hints {
+		d.state.Hints.Keymap = d.keymap
+	}
+}
+
+func (d *daemon) followCapsLock(typed bool) {
+	if !d.hints || d.vt == nil || d.inactive || d.state.Prompt.Kind == theme.NoPrompt {
+		if d.capsWatched {
+			d.capsWatched, d.capsAt, d.rearm = false, time.Time{}, true
+		}
+		d.state.Hints.CapsLock = false
+		return
+	}
+	now := d.cfg.Clock.Now()
+	if d.capsWatched && !typed && now.Before(d.capsAt) {
+		return
+	}
+	d.capsWatched = true
+	if on, err := d.vt.CapsLock(); err != nil {
+		d.cfg.Log.Warn("reading Caps Lock", "err", err)
+	} else {
+		d.state.Hints.CapsLock = on
+	}
+	d.capsAt, d.rearm = now.Add(capsLockPoll), true
 }

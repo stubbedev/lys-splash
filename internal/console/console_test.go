@@ -17,6 +17,7 @@ type fakeTTY struct {
 	mode, kbMode int
 	termios      unix.Termios
 	closed       bool
+	locks        byte
 	failSet      map[string]error
 	calls        []string
 	out          bytes.Buffer
@@ -34,6 +35,11 @@ func (f *fakeTTY) Read([]byte) (int, error)    { return 0, os.ErrClosed }
 func (f *fakeTTY) Write(b []byte) (int, error) { return f.out.Write(b) }
 func (f *fakeTTY) Mode() (int, error)          { return f.mode, nil }
 func (f *fakeTTY) KeyboardMode() (int, error)  { return f.kbMode, nil }
+func (f *fakeTTY) LockFlags() (byte, error) {
+	f.calls = append(f.calls, "lockflags")
+	return f.locks, nil
+}
+
 func (f *fakeTTY) Winsize() (unix.Winsize, error) {
 	return unix.Winsize{Row: 25, Col: 80}, nil
 }
@@ -212,6 +218,11 @@ func TestTextView(t *testing.T) {
 		{theme.State{Message: "Unlocking"}, "\r\n"},
 		{theme.State{Message: "Unlocking", Prompt: theme.Prompt{Kind: theme.QuestionPrompt, Text: "Go?", Shown: "ye"}}, clearLine + "Go? ye"},
 		{theme.State{Message: "Unlocking", Updating: true, Progress: 40, Prompt: theme.Prompt{Kind: theme.QuestionPrompt, Text: "Go?", Shown: "ye"}}, clearLine + "40%\r\n" + clearLine + "Go? ye"},
+		{theme.State{Message: "Unlocking", Hints: theme.Hints{Keymap: "de"}}, "\r\n"},
+		{theme.State{Message: "Unlocking", Hints: theme.Hints{Keymap: "de"}, Prompt: theme.Prompt{Kind: theme.PasswordPrompt, Text: "Disk:"}}, clearLine + "Disk: [de] "},
+		{theme.State{Message: "Unlocking", Hints: theme.Hints{Keymap: "de", CapsLock: true}, Prompt: theme.Prompt{Kind: theme.PasswordPrompt, Text: "Disk:"}}, clearLine + "Disk: [de] (Caps Lock is on) "},
+		{theme.State{Message: "Unlocking", Hints: theme.Hints{Keymap: "de", CapsLock: true}, Prompt: theme.Prompt{Kind: theme.PasswordPrompt, Text: "Disk:"}}, ""},
+		{theme.State{Message: "Unlocking", Hints: theme.Hints{Keymap: "de"}, Prompt: theme.Prompt{Kind: theme.PasswordPrompt, Text: "Disk:"}}, clearLine + "Disk: [de] "},
 	}
 	var prev *theme.State
 	for i, s := range steps {
@@ -226,5 +237,23 @@ func TestTextView(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "•") {
 		t.Error("the text view echoed password bullets")
+	}
+}
+
+func TestCapsLockReadsTheLockFlag(t *testing.T) {
+	t.Parallel()
+	f := newFakeTTY()
+	v, err := takeOver(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		flags byte
+		want  bool
+	}{{0, false}, {kCapsLock, true}, {0x03, false}, {0x07, true}} {
+		f.locks = tc.flags
+		if on, err := v.CapsLock(); err != nil || on != tc.want {
+			t.Errorf("flags %#x: CapsLock = %v, %v; want %v", tc.flags, on, err, tc.want)
+		}
 	}
 }

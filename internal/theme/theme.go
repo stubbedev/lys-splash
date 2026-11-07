@@ -50,7 +50,8 @@ type Theme struct {
 	Logo       Logo
 	Throbber   Throbber
 	// Units shows the name of each unit systemd starts on the message line.
-	Units bool
+	Units       bool
+	PromptHints bool
 }
 
 // Default is the theme embedded in the binary.
@@ -97,12 +98,13 @@ func parse(file string, data []byte, base *Theme) (Theme, error) {
 		t = *base
 	}
 	fields := map[string]func(*yaml.Node) error{
-		"background": decode(&t.Background, parseColor),
-		"foreground": decode(&t.Foreground, parseColor),
-		"accent":     decode(&t.Accent, parseColor),
-		"logo":       decode(&t.Logo, enum(map[string]Logo{"firmware": FirmwareLogo, "lys": LysLogo})),
-		"throbber":   decode(&t.Throbber, enum(map[string]Throbber{"spinner": Spinner, "dots": Dots})),
-		"units":      decode(&t.Units, func(b bool) (bool, error) { return b, nil }),
+		"background":   decode(&t.Background, parseColor),
+		"foreground":   decode(&t.Foreground, parseColor),
+		"accent":       decode(&t.Accent, parseColor),
+		"logo":         decode(&t.Logo, enum(map[string]Logo{"firmware": FirmwareLogo, "lys": LysLogo})),
+		"throbber":     decode(&t.Throbber, enum(map[string]Throbber{"spinner": Spinner, "dots": Dots})),
+		"units":        decode(&t.Units, identity[bool]),
+		"prompt-hints": decode(&t.PromptHints, identity[bool]),
 	}
 	var errs []error
 	seen := map[string]bool{}
@@ -151,6 +153,8 @@ func decode[R, T any](dst *T, conv func(R) (T, error)) func(*yaml.Node) error {
 		return nil
 	}
 }
+
+func identity[T any](v T) (T, error) { return v, nil }
 
 func parseColor(s string) (render.Color, error) {
 	if len(s) != 7 || s[0] != '#' {

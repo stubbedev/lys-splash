@@ -38,8 +38,14 @@ func (t TextView) Show(prev *theme.State, cur theme.State) error {
 	switch {
 	case cur.Prompt.Kind == theme.NoPrompt && open:
 		out = append(out, "\r\n"...)
-	case cur.Prompt.Kind != theme.NoPrompt && (cur.Prompt != before.Prompt || len(out) > 0):
+	case cur.Prompt.Kind != theme.NoPrompt && (cur.Prompt != before.Prompt || hintsChanged(before, cur) || len(out) > 0):
 		out = append(append(out, clearLine...), cur.Prompt.Text...)
+		if keymap := cur.KeymapShown(); keymap != "" {
+			out = append(append(append(out, " ["...), keymap...), ']')
+		}
+		if caps := cur.CapsLockShown(); caps != "" {
+			out = append(append(append(out, " ("...), caps...), ')')
+		}
 		out = append(out, ' ')
 		if cur.Prompt.Kind == theme.QuestionPrompt {
 			out = append(out, cur.Prompt.Shown...)
@@ -52,4 +58,8 @@ func (t TextView) Show(prev *theme.State, cur theme.State) error {
 		return fmt.Errorf("console: show the splash as text: %w", err)
 	}
 	return nil
+}
+
+func hintsChanged(before, cur theme.State) bool {
+	return before.KeymapShown() != cur.KeymapShown() || before.CapsLockShown() != cur.CapsLockShown()
 }

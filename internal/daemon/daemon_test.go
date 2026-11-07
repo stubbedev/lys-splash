@@ -96,13 +96,15 @@ func (d *fakeDisplay) Close(retain bool) error {
 }
 
 type fakeVT struct {
-	input    chan []byte
-	reading  chan struct{}
-	mu       sync.Mutex
-	graphics bool
-	restored string
-	reclaims int
-	out      strings.Builder
+	input     chan []byte
+	reading   chan struct{}
+	mu        sync.Mutex
+	graphics  bool
+	restored  string
+	reclaims  int
+	caps      bool
+	capsReads int
+	out       strings.Builder
 }
 
 func newVT() *fakeVT {
@@ -135,6 +137,25 @@ func (v *fakeVT) Reclaim() error {
 	v.reclaims++
 	v.graphics = false
 	return nil
+}
+
+func (v *fakeVT) CapsLock() (bool, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.capsReads++
+	return v.caps, nil
+}
+
+func (v *fakeVT) setCaps(on bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.caps = on
+}
+
+func (v *fakeVT) reads() int {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.capsReads
 }
 
 func (v *fakeVT) reclaimed() (int, bool) {
@@ -227,6 +248,8 @@ type setup struct {
 	log       *slog.Logger
 	loadBoot  func(string) (time.Duration, error)
 	loadTheme func(string) (theme.Theme, error)
+	keymap    func() (string, error)
+	theme     *theme.Theme
 }
 
 func saveUnsynced(path string, d time.Duration) error {
@@ -276,10 +299,18 @@ func start(t *testing.T, s setup) *run {
 	if loadTheme == nil {
 		loadTheme = func(string) (theme.Theme, error) { return theme.Default(), nil }
 	}
+	keymap := s.keymap
+	if keymap == nil {
+		keymap = func() (string, error) { return "", nil }
+	}
+	th := theme.Default()
+	if s.theme != nil {
+		th = *s.theme
+	}
 	started := make(chan *daemon, 1)
-	cfg := Config{started: func(d *daemon) { started <- d }, Mode: s.mode, Server: listen(t, r.socket), Chroot: chroot, BootDuration: r.duration, LoadBootDuration: load, SaveBootDuration: save, LoadTheme: loadTheme, RasterizeLogo: theme.RasterizeLogo, Clock: SystemClock{}, Log: log}
+	cfg := Config{started: func(d *daemon) { started <- d }, LoadKeymap: keymap, Mode: s.mode, Server: listen(t, r.socket), Chroot: chroot, BootDuration: r.duration, LoadBootDuration: load, SaveBootDuration: save, LoadTheme: loadTheme, RasterizeLogo: theme.RasterizeLogo, Clock: SystemClock{}, Log: log}
 	go func() {
-		r.done <- Run(ctx, cfg, theme.Default(), nil, Devices{Display: r.display, VT: vt, Console: r.console})
+		r.done <- Run(ctx, cfg, th, nil, Devices{Display: r.display, VT: vt, Console: r.console})
 	}()
 	r.d = <-started
 	t.Cleanup(func() {
@@ -539,7 +570,7 @@ func TestPanicRestoresTheVT(t *testing.T) {
 	display.screens = []Screen{newScreen(image.Pt(64, 64))}
 	vt := newVT()
 	socket := "@lys-splash-daemon-test-" + rand.Text()
-	cfg := Config{Server: listen(t, socket), Chroot: func(string) error { return nil }, LoadBootDuration: LoadBootDuration, RasterizeLogo: theme.RasterizeLogo, Clock: SystemClock{}, Log: slog.New(slog.DiscardHandler)}
+	cfg := Config{Server: listen(t, socket), Chroot: func(string) error { return nil }, LoadBootDuration: LoadBootDuration, LoadKeymap: func() (string, error) { return "", nil }, RasterizeLogo: theme.RasterizeLogo, Clock: SystemClock{}, Log: slog.New(slog.DiscardHandler)}
 	panicked := make(chan any, 1)
 	go func() {
 		defer func() { panicked <- recover() }()

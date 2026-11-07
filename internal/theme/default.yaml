@@ -10,3 +10,5 @@ logo: firmware
 throbber: spinner
 # Show the name of each unit systemd starts under the throbber.
 units: false
+# Show Caps Lock and the console keymap at a password prompt.
+prompt-hints: true

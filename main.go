@@ -28,6 +28,7 @@ import (
 	"github.com/stubbedev/lys-splash/internal/client"
 	"github.com/stubbedev/lys-splash/internal/console"
 	"github.com/stubbedev/lys-splash/internal/daemon"
+	"github.com/stubbedev/lys-splash/internal/keymap"
 	"github.com/stubbedev/lys-splash/internal/kms"
 	"github.com/stubbedev/lys-splash/internal/kmsg"
 	"github.com/stubbedev/lys-splash/internal/protocol"
@@ -314,6 +315,7 @@ func serve(o options, base *slog.Logger) (err error) {
 		SaveBootDuration: daemon.SaveBootDuration,
 		LoadTheme:        theme.Load,
 		RasterizeLogo:    theme.RasterizeLogo,
+		LoadKeymap:       func() (string, error) { return keymap.Load("/") },
 		Clock:            daemon.SystemClock{},
 		Log:              log,
 	}

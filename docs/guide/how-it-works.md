@@ -94,7 +94,17 @@ Prompts queue and show one at a time, oldest first. Every password typed is
 cached for the next disk, so one passphrase can unlock several. Every buffer that
 held a secret is zeroed once it is no longer needed. The throbber and the boot
 progress hold still until a prompt is answered, so a prompt that waits for hours
-redraws only when a key is typed.
+redraws only when a key is typed or Caps Lock changes.
+
+While a prompt shows, and the theme's `prompt-hints` is on, the splash reads the
+keyboard's lock flags (`KDGKBLED`) on the VT when the prompt appears, after each
+key, and four times a second, since Caps Lock alone sends the terminal nothing.
+"Caps Lock is on" appears under the entry while it is. Beside the entry it shows
+the console keymap: `KEYMAP` from `/etc/vconsole.conf`, else `XKBLAYOUT` from
+`/etc/default/keyboard` (initramfs-tools' console-setup), read at start, after
+the switch to the real root and once the system is initialized, since the real
+root may load another. A root that names no keymap leaves the one shown, as the
+kernel keeps it loaded. Without a prompt nothing is read.
 
 The keyboard comes from the active virtual terminal. On a kernel without virtual
 terminals, prompts get no answer.
@@ -103,7 +113,8 @@ terminals, prompts get no answer.
 
 With no graphical output the splash is text on the virtual terminal: each message
 on its own line, the update's progress as a percentage, and the prompt on the last
-line, a question's answer echoed and a password's not.
+line, a question's answer echoed and a password's not. The prompt line carries
+the keymap in brackets and "(Caps Lock is on)" while it is.
 
 ## Handing the screen over
 
