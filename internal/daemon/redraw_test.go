@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stubbedev/lys-lib/testbuild"
+
 	"github.com/stubbedev/lys-splash/internal/kms"
 	"github.com/stubbedev/lys-splash/internal/theme"
 )
@@ -386,13 +388,13 @@ func TestALogoIsRasterizedOffTheLoopAndTheScreenWaitsForIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loop := goroutineID()
+	loop := testbuild.GoroutineID()
 	var onLoop atomic.Int32
 	entered, release := make(chan struct{}, 1), make(chan struct{})
 	clock := newFakeClock()
 	d := &daemon{
 		cfg: Config{Clock: clock, Log: slog.New(slog.DiscardHandler), RasterizeLogo: func(scale int) (*theme.LogoRaster, error) {
-			if goroutineID() == loop {
+			if testbuild.GoroutineID() == loop {
 				onLoop.Add(1)
 			}
 			entered <- struct{}{}

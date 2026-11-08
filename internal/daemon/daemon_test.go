@@ -10,9 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +18,7 @@ import (
 	"time"
 
 	"github.com/stubbedev/lys-lib/drm"
+	"github.com/stubbedev/lys-lib/testbuild"
 
 	"github.com/stubbedev/lys-splash/internal/key"
 	"github.com/stubbedev/lys-splash/internal/kms"
@@ -857,20 +856,9 @@ type stoppedVT struct {
 	loop    atomic.Uint64
 }
 
-func goroutineID() uint64 {
-	buf := make([]byte, 64)
-	n := runtime.Stack(buf, false)
-	id, _, _ := strings.Cut(strings.TrimPrefix(string(buf[:n]), "goroutine "), " ")
-	v, err := strconv.ParseUint(id, 10, 64)
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
-
 func (v *stoppedVT) Write(b []byte) (int, error) {
 	v.writes.Add(1)
-	if goroutineID() == v.loop.Load() {
+	if testbuild.GoroutineID() == v.loop.Load() {
 		v.onLoop.Add(1)
 	}
 	select {
@@ -884,7 +872,7 @@ func (v *stoppedVT) Write(b []byte) (int, error) {
 func TestAStoppedTerminalLeavesTheLoopRunning(t *testing.T) {
 	v := &stoppedVT{fakeVT: newVT(), entered: make(chan struct{}, 1), release: make(chan struct{})}
 	q := newVTQueue(v, slog.New(slog.DiscardHandler))
-	v.loop.Store(goroutineID())
+	v.loop.Store(testbuild.GoroutineID())
 	if _, err := q.Write([]byte("first")); err != nil {
 		t.Fatal(err)
 	}

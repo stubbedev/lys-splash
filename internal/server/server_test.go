@@ -10,13 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
-	"runtime"
 	"slices"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stubbedev/lys-lib/testbuild"
 
 	"github.com/stubbedev/lys-splash/internal/protocol"
 )
@@ -344,21 +343,10 @@ type stalled struct {
 	end     chan error
 }
 
-func goroutineID() uint64 {
-	buf := make([]byte, 64)
-	n := runtime.Stack(buf, false)
-	id, _, _ := strings.Cut(strings.TrimPrefix(string(buf[:n]), "goroutine "), " ")
-	v, err := strconv.ParseUint(id, 10, 64)
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
-
 func (s *stalled) Write(b []byte) (int, error) {
 	s.mu.Lock()
 	s.writes = append(s.writes, b)
-	if goroutineID() == s.loop {
+	if testbuild.GoroutineID() == s.loop {
 		s.onLoop++
 	}
 	s.mu.Unlock()
@@ -378,7 +366,7 @@ func (s *stalled) counts() (writes, onLoop int) {
 func serveStalled(t *testing.T) (*recorder, *stalled, *net.UnixConn) {
 	t.Helper()
 	name := socketName()
-	st := &stalled{loop: goroutineID(), entered: make(chan struct{}, 64), end: make(chan error, 64)}
+	st := &stalled{loop: testbuild.GoroutineID(), entered: make(chan struct{}, 64), end: make(chan error, 64)}
 	r := &recorder{events: make(chan event, 64), answer: func(*Call) (protocol.Response, bool) { return nil, false }}
 	s, err := Listen(name, uid(), slog.New(slog.DiscardHandler))
 	if err != nil {

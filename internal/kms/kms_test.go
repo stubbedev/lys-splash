@@ -7,9 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stubbedev/lys-lib/drm"
+	"github.com/stubbedev/lys-lib/testbuild"
 	"golang.org/x/sys/unix"
 )
 
@@ -1073,27 +1072,16 @@ func TestDisplayDoesNotRetryOtherFailures(t *testing.T) {
 	}
 }
 
-func goroutineID() uint64 {
-	buf := make([]byte, 64)
-	n := runtime.Stack(buf, false)
-	id, _, _ := strings.Cut(strings.TrimPrefix(string(buf[:n]), "goroutine "), " ")
-	v, err := strconv.ParseUint(id, 10, 64)
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
-
 func TestProbingAndLightingNeverHoldTheFlips(t *testing.T) {
 	t.Parallel()
-	loop := goroutineID()
+	loop := testbuild.GoroutineID()
 	first := newFakeDevice("/dev/dri/card0", 2)
 	first.connect(40, [2]uint32{531, 299}, mode(64, 32, true))
 	second := newFakeDevice("/dev/dri/card1", 1)
 	second.connect(50, [2]uint32{531, 299}, mode(64, 32, true))
 	var onLoop atomic.Int32
 	count := func() {
-		if goroutineID() == loop {
+		if testbuild.GoroutineID() == loop {
 			onLoop.Add(1)
 		}
 	}
