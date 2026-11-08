@@ -7,8 +7,7 @@
 <p align="center">
   The lys desktop's boot splash, in place of Plymouth. It starts in the
   initrd, draws on every output, asks for disk passwords, survives the
-  switch to the real root, and leaves its last frame on screen for
-  lys-login's greeter to take over without a flicker.
+  switch to the real root and hands its last frame to the display manager.
 </p>
 
 <p align="center">
@@ -21,13 +20,14 @@
   <img src="internal/theme/testdata/golden/boot-progress-50.png" width="480" alt="The boot splash">
 </p>
 
-It speaks plymouthd's socket protocol, so systemd and its password agents
-talk to it unchanged. It is one static, pure-Go binary (`CGO_ENABLED=0`)
-with its theme embedded, so the initrd carries no libraries for it.
+It speaks plymouthd's socket protocol and answers to plymouth's command line,
+so systemd, its password agents and cryptsetup's scripts work with it
+unchanged. It is one static, pure-Go binary with its theme, font and logo
+embedded.
 
 ## Install
 
-On NixOS, add the flake as an input and import its module:
+NixOS:
 
 ```nix
 {
@@ -36,15 +36,13 @@ On NixOS, add the flake as an input and import its module:
 }
 ```
 
-On Ubuntu and Debian, the package's `compat` output replaces plymouth under
-`/usr`. The [install guide](https://stubbedev.github.io/lys-splash/guide/install)
-has the steps.
+Ubuntu and Debian: copy the package's `compat` output under `/usr`; see the
+[install guide](https://stubbedev.github.io/lys-splash/guide/install).
 
 ## Use
 
-There is nothing to run: the next boot shows the splash. Esc shows the boot
-messages. Add `plymouth.enable=0` to the kernel command line to boot without
-it. Colours, the logo and the throbber are set in
+The next boot shows the splash. Esc toggles the boot messages.
+`plymouth.enable=0` on the kernel command line boots without it. The theme is
 `/etc/lys-splash/theme.yaml`:
 
 ```yaml
@@ -52,27 +50,20 @@ accent: "#7aa2f7"
 throbber: dots
 ```
 
-Do not start the daemon on a machine you are using: it takes over the display.
+Do not start the daemon on a running desktop: it takes over the display.
 
 ## Documentation
 
-[stubbedev.github.io/lys-splash](https://stubbedev.github.io/lys-splash/) has
-the [configuration](https://stubbedev.github.io/lys-splash/guide/configuration),
-the [command line](https://stubbedev.github.io/lys-splash/guide/command-line),
-[how it works](https://stubbedev.github.io/lys-splash/guide/how-it-works),
-including the contract a display manager follows to take the screen over, and
-the [development](https://stubbedev.github.io/lys-splash/guide/development)
-recipes and checks.
+[stubbedev.github.io/lys-splash](https://stubbedev.github.io/lys-splash/)
 
 ## The lys family
 
-lys-splash is part of the lys desktop, with
 [lys-shell](https://github.com/stubbedev/lys-shell),
 [lys-wm](https://github.com/stubbedev/lys-wm),
 [lys-ui](https://github.com/stubbedev/lys-ui),
 [lys-lib](https://github.com/stubbedev/lys-lib),
 [lys-login](https://github.com/stubbedev/lys-login),
-[lys-polkit](https://github.com/stubbedev/lys-polkit) and
+[lys-polkit](https://github.com/stubbedev/lys-polkit),
 [lys-secrets](https://github.com/stubbedev/lys-secrets).
 
 ## License

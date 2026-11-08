@@ -1,178 +1,140 @@
 # How it works
 
-## A boot
+## Boot sequence
 
-1. **In the initrd,** `lys-splash-start.service` runs
-   `lys-splash --mode=boot --pid-file=/run/plymouth/pid`, after udev and the
-   console setup. On initramfs-tools the `init-premount` script runs `plymouthd`
-   instead. The splash re-executes itself with `@` leading `argv[0]`, which makes
-   systemd spare it across the switch to the real root.
-2. **Password requests** reach it through plymouth's interfaces:
-   `lys-splash-ask-password.path` starts `systemd-tty-ask-password-agent
-   --watch --plymouth` when a request appears, and cryptsetup's initramfs
-   scripts call `plymouth`.
-3. **Before the switch,** `lys-splash-switch-root.service` or the `init-bottom`
-   script runs `lys-splash update-root-fs --new-root-dir=...`, and the splash
-   chroots into the new root.
-4. **In the real root,** `lys-splash-start.service` runs again, finds the socket
-   taken and exits 0. The splash that started in the initrd is still the one on
-   screen. `lys-splash-read-write.service` tells it the root is writable, and it
-   takes the VT back after systemd reset the console.
-5. **At the end,** a display manager [takes the screen
-   over](#handing-the-screen-over), or with none `lys-splash-quit.service` quits
-   the splash at `multi-user.target` and the console comes back with the boot
-   messages. `lys-splash-quit-wait.service` holds logins until then.
+1. **Initrd.** `lys-splash-start.service` runs
+   `lys-splash --mode=boot --pid-file=/run/plymouth/pid` after udev and
+   `systemd-vconsole-setup`. On initramfs-tools the `init-premount` script runs
+   `plymouthd` instead. The daemon re-executes itself with `@` prefixed to
+   `argv[0]` so systemd spares it across the switch to the real root.
+2. **Passwords.** `lys-splash-ask-password.path` starts
+   `systemd-tty-ask-password-agent --watch --plymouth` when a request appears;
+   cryptsetup's initramfs scripts call `plymouth` directly.
+3. **Switch root.** `lys-splash-switch-root.service` (or the `init-bottom`
+   script) runs `update-root-fs --new-root-dir=...`, and the daemon chroots
+   into the new root.
+4. **Real root.** `lys-splash-start.service` runs again, finds the socket taken
+   and exits 0; the initrd's splash stays on screen.
+   `lys-splash-read-write.service` reports the root writable, and the splash
+   retakes the VT after systemd resets the console.
+5. **End.** A display manager [takes over](#hand-over-to-a-display-manager), or
+   `lys-splash-quit.service` quits the splash at `multi-user.target` and the
+   console returns with the boot messages. `lys-splash-quit-wait.service` holds
+   `getty-pre.target` until then.
 
-The splash records how long it showed in `/var/lib/lys-splash/boot-duration`
-when it quits, if it came through the switch to the real root and the root became
-writable. A boot splash started on a running system, as NixOS does when a
-configuration first adds the unit, records nothing, so it cannot leave the next
-boot a duration of a fraction of a second. The next boot's progress bar runs
-against that time, and appears at the switch to the real root when the initrd
-does not hold the file. A crash leaves the previous value, because the file is
-replaced whole. The splash writes it after it has answered the quit and released
-the screen, the VT and the console, so a disk with a long write queue delays only
-the splash's exit, and with it `lys-splash --wait`, never the hand-over.
+### Boot duration
 
-## The units
+On quit, the splash writes how long it showed to
+`/var/lib/lys-splash/boot-duration`, but only if it came through the switch to
+the real root and the root became writable. The file is replaced atomically and
+written after the screen, VT and console are released, so a slow disk delays
+only the daemon's exit (and `--wait`), not the hand-over. The next boot's
+progress bar runs against it; if the initrd lacks the file, the bar appears
+after the switch to the real root.
 
-Each unit conflicts with the Plymouth unit it stands in for and follows [the
-kernel command line](/guide/install#the-kernel-command-line).
+## Units
 
-| Unit | Wanted by | What it does |
+Each unit conflicts with the Plymouth unit of the same role and carries the
+[kernel command line](/guide/install#kernel-command-line) conditions.
+
+| Unit | Wanted by | Role |
 | --- | --- | --- |
 | `lys-splash-start.service` | `sysinit.target`, `initrd-switch-root.target` | Starts the boot splash |
-| `lys-splash-ask-password.path`, `.service` | `sysinit.target` | Forwards systemd's password requests to the splash |
-| `lys-splash-switch-root.service` | `initrd-switch-root.target` | Moves the splash into the real root; only in the initrd |
-| `lys-splash-read-write.service` | `sysinit.target` | Tells the splash the root is writable; only outside the initrd |
+| `lys-splash-ask-password.path`, `.service` | `sysinit.target` | Forwards systemd's password requests |
+| `lys-splash-switch-root.service` | `initrd-switch-root.target` | Moves the splash into the real root (initrd only) |
+| `lys-splash-read-write.service` | `sysinit.target` | Reports the root writable (outside the initrd) |
 | `lys-splash-quit.service` | `multi-user.target` | Quits the splash |
 | `lys-splash-quit-wait.service` | `multi-user.target` | Holds `getty-pre.target` until the splash quits |
-| `lys-splash-reboot.service` | `reboot.target` | The reboot splash |
-| `lys-splash-poweroff.service` | `poweroff.target` | The shutdown splash |
-| `lys-splash-halt.service` | `halt.target` | The shutdown splash |
-| `lys-splash-kexec.service` | `kexec.target` | The kexec splash |
+| `lys-splash-reboot.service` | `reboot.target` | Reboot splash |
+| `lys-splash-poweroff.service` | `poweroff.target` | Shutdown splash |
+| `lys-splash-halt.service` | `halt.target` | Shutdown splash |
+| `lys-splash-kexec.service` | `kexec.target` | Kexec splash |
 
 ## Drawing
 
-Every connected output of every DRM card is lit on two linear XRGB8888 dumb
-buffers, flipped with atomic commits, one per vblank, copying only what changed.
+Every connected output of every DRM card gets two linear XRGB8888 dumb buffers,
+flipped with atomic commits at most once per vblank.
 
-- **Frame loop.** One goroutine draws and flips, and it never waits for anything
-  else. A worker per card opens it, probes its connectors and allocates buffers;
-  each connection has a writer behind a bounded queue, dropped if its client
-  stops reading; the theme and the boot duration are read on a goroutine of their
-  own. The loop wakes only when the picture changes, and damage is the separate
-  rectangles that did, reported to the kernel with `FB_DAMAGE_CLIPS`.
-- **Mode.** An output keeps the mode it already shows, so the first frame needs
-  no modeset. Otherwise it takes the sink's preferred mode, or else its first.
-- **Firmware framebuffers.** The splash draws on simpledrm, efidrm, vesadrm and
-  ofdrm, and follows kernel uevents as the native driver takes over. It does not
-  draw on a firmware framebuffer at 640x480, 800x600 or 1024x768, which the
-  firmware sets up in place of the panel's own resolution; it waits for the
-  native driver, as Plymouth does.
-- **Scale.** Each output gets scale 1 or 2 by Plymouth's rules, from the size
-  EDID reports. A firmware framebuffer that does not know its display's size
-  guesses from the resolution, and later outputs keep that guess, so the picture
-  does not jump when the native driver arrives.
-- **Rotation.** The connector's panel orientation turns the frame, so a panel
-  mounted sideways or upside down shows it upright.
-- **Firmware logo.** With `logo: firmware` the logo comes from the ACPI BGRT
-  table in `/sys/firmware/acpi/bgrt`, if its status says it is still on screen.
-  It stays at the firmware's offsets when they centre it on this mode, so it does
-  not move, and otherwise goes at the height Plymouth places it.
+- **Frame loop.** One goroutine draws and flips and never blocks on anything
+  else. Per-card workers open cards, probe connectors and allocate buffers;
+  each client connection has a writer behind a bounded queue and is dropped if
+  it stops reading; theme and boot duration load on their own goroutine. The
+  loop wakes only on change and reports damaged rectangles with
+  `FB_DAMAGE_CLIPS`.
+- **Mode.** An output keeps its current mode, so the first frame needs no
+  modeset; otherwise it takes the preferred mode, else the first.
+- **Firmware framebuffers.** Draws on simpledrm, efidrm, vesadrm and ofdrm and
+  follows uevents as the native driver takes over. A firmware framebuffer at
+  640x480, 800x600 or 1024x768 is skipped in favour of the native driver.
+- **Scale.** 1 or 2 per output, from the physical size in EDID. A firmware
+  framebuffer without a known size guesses from the resolution, and later
+  outputs keep that guess so the picture does not jump.
+- **Rotation.** The connector's `panel orientation` rotates the frame.
+- **Firmware logo.** With `logo: firmware`, read from `/sys/firmware/acpi/bgrt`
+  if its status says it is still on screen. It keeps the firmware's offsets when
+  they centre it on the current mode, otherwise it is placed at a fixed height.
 
 ## Boot messages
 
-While the splash shows, it redirects the console into a pseudo-terminal with
-`TIOCCONS`, so the kernel's and systemd's text does not draw over the frame. It
-keeps that text for two uses: <kbd>Esc</kbd> shows it, and a quit without
-`--retain-splash` writes it back to the console.
+While shown, the splash redirects the console into a pseudo-terminal with
+`TIOCCONS` so kernel and systemd output does not draw over the frame. The
+captured text is shown on <kbd>Esc</kbd> and written back to the console on a
+`quit` without `--retain-splash`.
 
 ## Passwords
 
-Prompts queue and show one at a time, oldest first. Every password typed is
-cached for the next disk, so one passphrase can unlock several. Every buffer that
-held a secret is zeroed once it is no longer needed. The throbber and the boot
-progress hold still until a prompt is answered, so a prompt that waits for hours
-redraws only when a key is typed or Caps Lock changes.
-
-While a prompt shows, and the theme's `prompt-hints` is on, the splash reads the
-keyboard's lock flags (`KDGKBLED`) on the VT when the prompt appears, after each
-key, and four times a second, since Caps Lock alone sends the terminal nothing.
-"Caps Lock is on" appears under the entry while it is. Beside the entry it shows
-the console keymap: `KEYMAP` from `/etc/vconsole.conf`, else `XKBLAYOUT` from
-`/etc/default/keyboard` (initramfs-tools' console-setup), read at start, after
-the switch to the real root and once the system is initialized, since the real
-root may load another. A root that names no keymap leaves the one shown, as the
-kernel keeps it loaded. Without a prompt nothing is read.
-
-The keyboard comes from the active virtual terminal. On a kernel without virtual
-terminals, prompts get no answer.
+- Prompts queue and show one at a time, oldest first.
+- Every typed password is cached and tried on the next disk.
+- Buffers that held a secret are zeroed after use.
+- Throbber and progress hold still while a prompt waits; it redraws only on a
+  key or a Caps Lock change.
+- With `prompt-hints`, the keyboard LEDs (`KDGKBLED`) are read when the prompt
+  appears, after each key and four times a second. The keymap shown is
+  `KEYMAP` from `/etc/vconsole.conf`, else `XKBLAYOUT` from
+  `/etc/default/keyboard`, read at start, after the switch to the real root and
+  once the root is writable. A root that names none keeps the one shown.
+- Keys come from the active virtual terminal. On a kernel without virtual
+  terminals, prompts get no answer.
 
 ## Without a display
 
-With no graphical output the splash is text on the virtual terminal: each message
-on its own line, the update's progress as a percentage, and the prompt on the last
-line, a question's answer echoed and a password's not. The prompt line carries
-the keymap in brackets and "(Caps Lock is on)" while it is.
+With no graphical output the splash is text on the virtual terminal: one line
+per message, update progress as a percentage, and the prompt on the last line
+(a question's answer echoed, a password's not), with the keymap in brackets and
+"(Caps Lock is on)" when applicable.
 
-## Handing the screen over
+## Hand-over to a display manager
 
-The kernel's fbdev emulation (`drm_kms_helper.fbdev_emulation=1`, the default)
-restores its console's framebuffer with a full modeset whenever the last open
-file of a card closes (`drm_lastclose` → `drm_client_dev_restore`). Closing the
-splash's framebuffer with `CLOSEFB` does not prevent it: if lys-splash holds the
-last fd on a card when it exits, the console's frame replaces the splash's before
-the next compositor opens the card.
+With fbdev emulation on (the kernel default), closing the last open file of a
+card restores the kernel console with a modeset. So the splash's close must not
+be the last one:
 
-lys-splash therefore hands over in Plymouth's and GDM's order, so its close is
-never the last one:
-
-1. `lys-splash deactivate` drops DRM master on every card and keeps the cards
-   open, with the frame on screen.
+1. `lys-splash deactivate` drops DRM master on every card and keeps them open,
+   frame on screen.
 2. The compositor opens the cards and takes master without a modeset.
 3. `lys-splash quit --retain-splash` closes the splash's framebuffers with
-   `CLOSEFB` and exits. The compositor's fd keeps the card open, so nothing
-   restores the console.
+   `CLOSEFB` and exits. The compositor still holds the cards, so the console is
+   not restored.
 
-A display manager follows that order through this contract, as GDM does with
-Plymouth:
+A display manager implements this contract:
 
 - Its unit has `After=lys-splash-start.service getty@tty1.service
   lys-splash-quit.service` and `Conflicts=lys-splash-quit.service
-  getty@tty1.service`, so systemd neither quits the splash nor puts tty1 back
-  into text mode under it.
-- Before it starts its compositor it runs `lys-splash deactivate`
-  (`ExecStartPre=-lys-splash deactivate`; without a splash the call fails and is
-  ignored).
-- Once its first frame has been presented (`wp_presentation` feedback), it runs
+  getty@tty1.service`.
+- It runs `ExecStartPre=-lys-splash deactivate` before starting its compositor.
+- After its first frame is presented (`wp_presentation` feedback), it runs
   `lys-splash quit --retain-splash`.
 
-lys-login's greeter, on lys-wm, which keeps an inherited frame without a modeset,
-implements it.
-
-On a kernel without `CLOSEFB`, the splash logs a warning and its last frame goes
-away with it.
-
-Neither of the alternatives is used, and the NixOS module leaves fbdev emulation
-on: turning it off removes the kernel console from every card, and parking the
-card fds in systemd's fd store keeps the card open after the compositor exits, so
-the console would never come back.
+lys-login's greeter on lys-wm implements it. On a kernel without `CLOSEFB` the
+splash logs a warning and its frame disappears when it exits.
 
 ## Shutdown
 
-The shutdown, reboot and kexec splashes never close their cards. They re-execute
-with `@` leading `argv[0]` like the initrd's splash, so `systemd-shutdown` spares
-them, and the power goes with their frame still on screen. A `SIGTERM` in these
-modes keeps the frame too; in `boot` and `updates` it quits as `quit` does.
+The shutdown, reboot and kexec splashes never close their cards. They
+re-execute with `@` prefixed to `argv[0]` so `systemd-shutdown` spares them,
+and the power goes with the frame on screen. `SIGTERM` in these modes keeps the
+frame; in `boot` and `updates`, `SIGTERM` and `SIGINT` quit as `quit` does.
 
-The exception is a card driven by `nvidia`. Its PCI shutdown removes the DRM
-device and frees its state, and requires every client to be gone first, so a
-splash that closed its card later would oops the kernel and hang the machine
-short of the reset. On such a machine the shutdown splashes stay unmarked:
-`systemd-shutdown`'s `SIGTERM` ends them while the driver is still whole, and the
-console shows for the last moments.
-
-The daemon ignores `SIGPIPE`. Its standard error is usually a socket to journald,
-which goes before the splash does, and Go otherwise turns a failed write to it
-into the death of the process.
+Exception: when a card is driven by `nvidia`, whose shutdown requires all DRM
+clients gone, the shutdown splashes do not re-execute; `systemd-shutdown`'s
+`SIGTERM` ends them and the console shows for the last moments.

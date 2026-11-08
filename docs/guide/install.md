@@ -25,23 +25,20 @@ Add the flake as an input and import its module:
 }
 ```
 
-| Option | Default | What it is |
-| --- | --- | --- |
-| `boot.lys-splash.enable` | `false` | Puts the binary, the theme and the units into the systemd initrd and the system, and adds `splash` to the kernel command line |
-| `boot.lys-splash.package` | This flake's package | The package to run |
-| `boot.lys-splash.theme` | `{}` | The fields of [`theme.yaml`](/guide/configuration) |
+| Option | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `boot.lys-splash.enable` | bool | `false` | Installs the binary, theme and units into the systemd initrd and the system, and adds `splash` to the kernel command line |
+| `boot.lys-splash.package` | package | this flake's package | The package to run |
+| `boot.lys-splash.theme` | YAML attrs | `{}` | The fields of [`theme.yaml`](/guide/configuration), written to `/etc/lys-splash/theme.yaml` in the initrd and the system |
 
-It cannot be combined with `boot.plymouth.enable`; an assertion names both
-options.
-
-The module needs NixOS's systemd initrd, which is the only one on current
-nixos-unstable. On a release that still has the scripted one, also set
-`boot.initrd.systemd.enable = true`.
+It cannot be combined with `boot.plymouth.enable` (an assertion fails). It
+requires the systemd initrd: set `boot.initrd.systemd.enable = true` where that
+is not the default.
 
 ## Ubuntu and Debian
 
-The package's `compat` output is a tree to copy under `/usr`. Building it needs
-Nix; the machine it is built on can be another one.
+Build the package's `compat` output with Nix (on any machine) and copy it under
+`/usr`:
 
 ```sh
 nix build github:stubbedev/lys-splash#default.compat
@@ -54,45 +51,30 @@ sudo systemctl enable lys-splash-start.service lys-splash-quit.service \
 sudo update-initramfs -u
 ```
 
-The tree holds:
-
-| Path | What it is |
+| Path in `compat` | Contents |
 | --- | --- |
 | `bin/lys-splash` | The binary |
-| `bin/plymouth`, `sbin/plymouthd` | Links to it, which pick the [role](/guide/command-line) it runs in |
-| `lib/systemd/system/` | The [units](/guide/how-it-works#the-units), with `/usr` paths |
-| `share/initramfs-tools/` | The hook, which copies the binary, the links and the theme into the image, and the `init-premount`, `init-bottom` and `panic` scripts |
+| `bin/plymouth`, `sbin/plymouthd` | Symlinks to it that select the [role](/guide/command-line) |
+| `lib/systemd/system/` | The [units](/guide/how-it-works#units), with `/usr` paths |
+| `share/initramfs-tools/` | The hook (copies the binary, the links and `/etc/lys-splash/theme.yaml` into the image) and the `init-premount`, `init-bottom` and `panic` scripts |
 
-cryptsetup's initramfs scripts call `plymouth`, so they ask through the splash
-unchanged.
+cryptsetup's initramfs scripts call `plymouth` and so ask through the splash.
 
-CI builds such an image in Ubuntu 24.04 and checks that it holds the splash,
-the links and the scripts in initramfs-tools' order. It does not boot it; whole
-boots are tested on NixOS.
+## Kernel command line
 
-## The kernel command line
+The units and the initramfs-tools script apply the same rule: the splash runs
+when one of the "on" parameters is present and none of the "off" ones, in any
+order.
 
-The systemd units and initramfs-tools' script read it the same way, as one rule.
-The splash runs when the command line asks for it and nothing turns it off:
-
-| Parameter | What it does |
+| Parameter | Effect |
 | --- | --- |
-| `splash`, `splash=silent`, `rhgb` | Asks for the splash; one of them is needed |
-| `nosplash` | Turns it off, wherever it stands on the command line |
-| `splash=verbose` | Turns it off |
-| `plymouth.enable=0` | Turns it off |
+| `splash`, `splash=silent`, `rhgb` | On; one is required |
+| `nosplash`, `splash=verbose`, `plymouth.enable=0` | Off |
 
-Turned off, no unit runs at any stage of the boot or the shutdown, and the kernel
-and systemd keep the console, where systemd's console agent asks for passwords.
-The order of the parameters does not matter, so a splash started in the initramfs
-always has `lys-splash-quit.service` to end it. The units that show a splash do
-not run in a container either.
-
-Debian's Plymouth stops on `nosplash` in its units too. Where Plymouth falls back
-to scrolling text without `splash`, lys-splash leaves the console to the kernel.
-
-Without `splash` or `rhgb` on your bootloader's command line there is no splash, so
-add one. The NixOS module adds `splash`.
+When off, no lys-splash unit runs during boot or shutdown, and systemd's
+console agent asks for passwords. The splash units also do not run in a
+container. The NixOS module adds `splash`; on other systems add it to the
+bootloader's command line.
 
 ## Check that it works
 
@@ -101,10 +83,8 @@ sudo lys-splash --ping
 journalctl -b -u 'lys-splash*'
 ```
 
-After the boot has finished `--ping` exits 3, because no splash is running any
-more. The journal holds what a splash started by a unit said about its outputs,
-its theme and its quit. A splash that initramfs-tools' script starts has no
-standard error to keep, so it logs to `/dev/kmsg`: `dmesg` shows it, and so does
-`journalctl -b -t lys-splash` once journald runs. The kernel rate-limits what is
-written there, which `--debug` can reach; boot with `printk.devkmsg=on` to lift
-the limit.
+`--ping` exits 3 once the boot has finished, as no splash is running. A splash
+started by a unit logs to the journal. One started by the initramfs-tools
+script logs to `/dev/kmsg`: read it with `dmesg` or `journalctl -b -t
+lys-splash`. The kernel rate-limits `/dev/kmsg`; boot with `printk.devkmsg=on`
+to see all `--debug` output.

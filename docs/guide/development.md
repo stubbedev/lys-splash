@@ -1,92 +1,87 @@
 # Development
 
-Every dev tool comes from the flake: the Go toolchain, gopls, golangci-lint,
-delve, just, git and gh. Use `direnv allow` on entry, or `nix develop`
-explicitly. `GOTOOLCHAIN=local` keeps the compiler from downloading itself.
+The flake's dev shell (`direnv allow` or `nix develop`) provides Go, gopls,
+golangci-lint, delve, just, git, gh and the lys-ci tools, with
+`CGO_ENABLED=0` and `GOTOOLCHAIN=local`.
 
 ## Layout
 
-| Path | What it is |
+| Path | Contents |
 | --- | --- |
-| `main.go` | Picks the role from the command line, and starts the daemon or the client |
-| `internal/protocol` | plymouthd's socket protocol: requests and responses, encoded and decoded |
-| `internal/server` | The daemon side: the abstract socket, peer credentials, requests answered now or later |
+| `main.go` | Role selection; starts the daemon or the client |
+| `internal/protocol` | plymouthd's socket protocol: request and response codec |
+| `internal/server` | Daemon side of the socket: peer credentials, deferred answers |
 | `internal/client` | The plymouth command line |
-| `internal/daemon` | The splash process: the protocol's lifecycle from boot to quit, the modes and the boot duration |
-| `internal/theme` | The validated `theme.yaml` (default embedded) and the frame drawn from the splash's state with lys-lib's canvas, damage included |
-| `internal/kms` | Every card's outputs on two dumb buffers each: mode and scale choice, panel rotation, paced damage-limited flips, cards followed through kernel uevents |
-| `internal/kmsg` | The log handler for a detached daemon, whose log goes to the kernel's buffer |
-| `internal/console` | The virtual terminal, the console's captured output and the text fallback |
-| `internal/key` | The bytes the terminal sends, decoded into keys |
-| `internal/ask` | The queue of prompts, the text typed, the cached passwords and the keystroke watches |
-| `units/` | The systemd units, with `@placeholders@` the package fills in |
-| `initramfs-tools/` | The hook and scripts for Ubuntu and Debian |
-| `nix/` | The package, the NixOS module, the dev shell and the checks |
+| `internal/daemon` | Splash lifecycle from boot to quit, modes, boot duration |
+| `internal/theme` | `theme.yaml` validation (default embedded), BGRT logo, frame rendering with damage |
+| `internal/kms` | Outputs on two dumb buffers per card: mode and scale, rotation, paced damage-limited flips, uevents |
+| `internal/console` | Virtual terminal, captured console output, text fallback |
+| `internal/key` | Terminal bytes decoded into keys |
+| `internal/keymap` | Console keymap from `vconsole.conf` or `default/keyboard` |
+| `internal/ask` | Prompt queue, typed text, cached passwords, keystroke watches |
+| `internal/kmsg` | Log handler writing to `/dev/kmsg` for the detached daemon |
+| `internal/asynclog` | Log handler that never blocks the caller |
+| `units/` | systemd units with `@placeholders@` filled in by the package |
+| `initramfs-tools/` | Hook and scripts for Ubuntu and Debian |
+| `nix/` | Package, NixOS module, dev shell, checks |
 
 ## Recipes
 
-| Recipe | What it does |
+| Recipe | Effect |
 | --- | --- |
-| `just check` | Every release gate in order: vet, lint, test, build |
-| `just vet` | Static analysis with `go vet` |
-| `just lint` | `golangci-lint run` against the strict config in `.golangci.yml` |
+| `just check` | All gates in order: vet, lint, no-fused, test, build |
+| `just vet` | `go vet ./...` |
+| `just lint` | `golangci-lint run` with `.golangci.yml` |
+| `just no-fused` | Fails on float products fused into FMA, which round differently from amd64 |
 | `just test` | `go test ./...` |
-| `just build` | Compile-check every package |
-| `just plymouth-client` | Run nixpkgs' `plymouth` client against the server (`checks.plymouth-client`) |
-| `just initramfs-tools` | Install the compat output into an Ubuntu container, build an initramfs-tools image and check that it holds the splash, the links and the scripts (needs Docker) |
-| `just fmt` | Format every Go source in place |
+| `just build` | Compile-checks every package |
+| `just fmt` | `gofmt -w .` |
+| `just plymouth-client` | Runs the `plymouth-client` check |
+| `just initramfs-tools [image]` | Builds an initramfs-tools image from the compat output in an Ubuntu container (default `ubuntu:24.04`) and checks it holds the binary, links and scripts in order; needs Docker. It does not boot the image |
+| `just vendor-hash` | Updates `vendorHash` in `nix/package.nix` from `go.sum` |
+| `just release-patch`, `release-minor`, `release-major` | Tags and pushes the next release from a clean default branch with green CI |
 
 ## Nix
 
-- `nix build` builds the package (`nix/package.nix`). `vendorHash` changes with
-  go.sum.
-- `nix fmt` formats the nix files with alejandra.
-- `nix flake check` runs the checks:
+- `nix build`: the package (`nix/package.nix`), outputs `out` and `compat`.
+- `nix fmt`: alejandra.
+- `nix flake check` runs:
 
-| Check | What it does |
+| Check | Tests |
 | --- | --- |
-| `package` | Builds the package and runs its unit tests |
+| `package` | Builds the package and runs the unit tests |
 | `plymouth-client` | nixpkgs' `plymouth` client against the server |
-| `units` | Every unit conflicts with its Plymouth unit, and the units and initramfs-tools' script agree on a table of kernel command lines |
-| `module` | Evaluates the NixOS module and looks for the splash in its initrd |
-| `vm-kms` | A VM whose only card is vkms runs the kms package's real-card test as root |
-| `vm-kms-switch` | The splash on simpledrm and then on the native driver as it takes over, in a VM |
-| `vm-splash` | The daemon on virtio-gpu, with the plymouth client and systemd's password agent, then detached as `plymouthd` with its log reaching the journal |
-| `vm-boot` | A boot through the module, on virtio-gpu and without any display |
-| `vm-journal` | Reads a guest's whole journal past a host that drains the VM's shell slowly, which makes QEMU drop what the shell prints |
-| `vm-greeter` | Hands the splash's frame to lys-login's greeter on lys-wm and checks every screen dump on the way |
-| `vm-e2e` | The whole path in one test, each stage failing with its name: OVMF and simpledrm, then virtio-gpu, a LUKS root and a second LUKS disk unlocked by one passphrase typed at the splash, the splash surviving the switch to the real root, nixpkgs' plymouth client, the hand-over to the greeter, the reboot splash, and a machine without a display typing its passphrase at the text fallback |
+| `units` | Every unit conflicts with its Plymouth unit; units and initramfs-tools script agree on a table of kernel command lines |
+| `module` | Evaluates the NixOS module and finds the splash in the initrd |
+| `vm-kms` | The kms package's real-card test as root on a vkms-only VM |
+| `vm-kms-switch` | The splash on simpledrm, then on the native driver as it takes over |
+| `vm-splash` | The daemon on virtio-gpu with the plymouth client and systemd's password agent, then detached as `plymouthd` logging to the journal |
+| `vm-boot` | A boot through the module, on virtio-gpu and with no display |
+| `vm-journal` | Reading a guest's whole journal through a slowly drained VM shell |
+| `vm-greeter` | Hand-over to lys-login's greeter on lys-wm, checking every screen dump |
+| `vm-greeter-outputs` | Hand-over to the greeter with two vkms outputs, both lit by the splash and both taken by the greeter |
+| `vm-e2e` | The full path, each stage failing by name: OVMF and simpledrm, virtio-gpu, a LUKS root and a second LUKS disk unlocked by one passphrase at the splash, switch root, the plymouth client, hand-over to the greeter, the reboot splash, and a display-less machine typing its passphrase at the text fallback |
 
-The expected frames are in `internal/theme/testdata/golden`; the pictures on this
-site are those files.
+Expected frames live in `internal/theme/testdata/golden`; this site's pictures
+are those files.
+
+## CI
+
+`.github/workflows/ci.yml` runs `just check`; the `package`, `units`, `module`
+and `plymouth-client` checks; the initramfs-tools image; and `vm-e2e`,
+`vm-greeter`, `vm-boot`, `vm-splash` and `vm-journal` under KVM.
+`.github/workflows/security.yml` runs CodeQL, Grype and govulncheck, and
+dependency review on pull requests. Dependabot updates Go modules, actions and the site's npm packages.
 
 ## This site
 
-The site is in `docs/`, on the theme all lys sites share. Node is not in the dev
-shell:
+The site in `docs/` uses the shared lys theme. Node is not in the dev shell:
 
 ```sh
 cd docs
-nix shell nixpkgs#nodejs_22 -c npm install
+nix shell nixpkgs#nodejs_22 -c npm ci
 nix shell nixpkgs#nodejs_22 -c npm run build
 nix shell nixpkgs#nodejs_22 -c npm run preview
 ```
 
-`.github/workflows/docs.yml` publishes it on every push to `main`.
-
-## CI
-
-`.github/workflows/ci.yml` runs the gates, the `package`, `units`, `module` and
-`plymouth-client` checks, the initramfs-tools image in Ubuntu, and the VM checks
-`vm-e2e`, `vm-greeter`, `vm-boot`, `vm-splash` and `vm-journal` under KVM.
-
-`.github/workflows/security.yml` runs CodeQL (Go and GitHub Actions), Grype and
-govulncheck, uploading findings to code scanning; dependency review gates pull
-requests. Dependabot keeps the module and the workflows current.
-
-## Linting
-
-`.golangci.yml` starts from the standard linter set and layers on bodyclose,
-copyloopvar, errorlint, gosec, intrange, misspell, modernize, nolintlint,
-perfsprint, revive, unconvert, unparam, usestdlibvars and whitespace, with gofumpt
-and gci as formatters. No issue caps: every finding fails the build.
+`.github/workflows/docs.yml` publishes it on pushes to `main` that touch `docs/`, the workflow or the golden frames.

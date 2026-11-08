@@ -1,22 +1,21 @@
 # Configuration and themes
 
-The theme is the splash's only configuration file: `/etc/lys-splash/theme.yaml`,
-or the file `--theme` names. Without one the splash uses the theme embedded in
-the binary. A field left out keeps the embedded theme's value.
+The only configuration file is the theme: `/etc/lys-splash/theme.yaml`, or the
+file `--theme` names. Without it the embedded theme applies; a field left out
+keeps the embedded value.
 
-| Field | Values | Embedded value | What it sets |
+| Field | Values | Default | Effect |
 | --- | --- | --- | --- |
-| `background` | `#rrggbb` | `#000000` | The background |
-| `foreground` | `#rrggbb` | `#d8d9e6` | The message and prompt text |
-| `accent` | `#rrggbb` | `#ffb454` | The throbber, the progress bars and the prompt's border |
-| `logo` | `firmware`, `lys` | `firmware` | `firmware` shows the firmware's own logo when it left one, else lys's; `lys` always shows lys's |
-| `throbber` | `spinner`, `dots` | `spinner` | The busy animation |
-| `units` | `true`, `false` | `false` | Shows the name of each unit systemd starts under the throbber |
-| `prompt-hints` | `true`, `false` | `true` | Shows "Caps Lock is on" under a prompt and the console keymap beside it |
+| `background` | `#rrggbb` | `#000000` | Background colour |
+| `foreground` | `#rrggbb` | `#d8d9e6` | Message and prompt text |
+| `accent` | `#rrggbb` | `#ffb454` | Throbber, progress bars, prompt border |
+| `logo` | `firmware`, `lys` | `firmware` | `firmware`: the firmware's logo (ACPI BGRT) if it left one on screen, else lys's. `lys`: always lys's |
+| `throbber` | `spinner`, `dots` | `spinner` | Busy animation |
+| `units` | bool | `false` | Shows the name of each unit systemd starts under the throbber |
+| `prompt-hints` | bool | `true` | Shows "Caps Lock is on" under a prompt and the console keymap beside it |
 
-The background stays black in the embedded theme so the firmware's logo, drawn
-on black, does not change underneath. The logo and the font cannot be replaced
-from the theme, and the scale is chosen per output, not configured.
+The default background is black so the firmware's logo, drawn on black, blends
+in. The logo image, the font and the scale are not configurable.
 
 ```yaml
 accent: "#7aa2f7"
@@ -24,19 +23,21 @@ throbber: dots
 units: true
 ```
 
-With `prompt-hints`, a prompt shows the console's keymap beside the entry and
-warns while Caps Lock is on:
+`prompt-hints`:
 
 ![A password prompt with the Caps Lock warning](../../internal/theme/testdata/golden/password-capslock.png)
 
-`throbber: dots` looks like this:
+`throbber: dots`:
 
 ![The boot splash with three dots as its throbber](../../internal/theme/testdata/golden/boot-dots.png)
 
-## NixOS
+## Applying it
 
-`boot.lys-splash.theme` holds the same fields. The module writes them to
-`/etc/lys-splash/theme.yaml` in both the initrd and the system:
+| System | How |
+| --- | --- |
+| NixOS | Set `boot.lys-splash.theme` (same fields); the module writes the file into the initrd and the system |
+| Ubuntu, Debian | Edit `/etc/lys-splash/theme.yaml`, then `sudo update-initramfs -u` so the hook copies it into the image |
+| Running splash | `lys-splash reload` re-reads the file |
 
 ```nix
 {
@@ -47,33 +48,9 @@ warns while Caps Lock is on:
 }
 ```
 
-The option takes any YAML. Its fields are checked when the splash reads them,
-not when the system is built.
+## Invalid themes
 
-## Ubuntu and Debian
-
-The hook copies `/etc/lys-splash/theme.yaml` into the image when it builds one,
-so run `sudo update-initramfs -u` after changing the file.
-
-## A theme that does not validate
-
-A theme with an unknown field, a colour that is not `#rrggbb` or a value not on
-its list is rejected whole. The splash logs a warning naming the file, the line
-and the field, and draws the embedded theme, because a boot should not fail over
-its colours. On a systemd initrd, look for it in the journal:
-
-```sh
-journalctl -b -u lys-splash-start.service
-```
-
-A splash that initramfs-tools' script starts logs to the kernel's buffer instead:
-
-```sh
-journalctl -b -t lys-splash
-```
-
-## Trying a change
-
-`lys-splash reload` makes a running splash read its theme file again, with the
-same fallback to the embedded theme. It is only useful while a splash shows, so
-try themes in a VM.
+A theme with an unknown field, a colour that is not `#rrggbb` or a value outside
+its list is rejected whole: the splash logs a warning naming the file, line and
+field, and draws the embedded theme. The NixOS option is not validated at build
+time. See [where the logs are](/guide/install#check-that-it-works).

@@ -1,90 +1,94 @@
 # Command line
 
-One binary has every role. The name it runs under and its first argument pick
-the role:
+One binary has every role, picked by the name it runs under and its first
+argument:
 
-| Run as | Role |
+| Invoked as | Role |
 | --- | --- |
-| `plymouthd` | The daemon, which detaches once it is ready, as plymouthd does |
-| `lys-splash --mode=...`, with `--mode` first | The daemon, in the foreground |
-| `plymouth`, or `lys-splash` with anything else | The client |
+| `plymouthd` | Daemon; detaches once ready |
+| `lys-splash --mode=...` (`--mode` first) | Daemon, in the foreground |
+| `plymouth`, or `lys-splash` with anything else | Client |
 
-## The daemon
+The units and initramfs scripts start the daemon; you normally do not.
 
-| Option | What it does |
-| --- | --- |
-| `--mode=MODE` | What the splash shows for: `boot` (the default), `shutdown`, `reboot`, `kexec` or `updates` |
-| `--theme=FILE` | The theme file, by default `/etc/lys-splash/theme.yaml` |
-| `--pid-file=FILE` | Writes the daemon's pid here, and removes it on exit |
-| `--no-daemon` | As `plymouthd`, stays in the foreground |
-| `--debug` | Logs at debug level |
-| `--attach-to-session` | Accepted for plymouthd's command line; the splash always runs on the console's session |
+## Daemon
 
-When a splash is already running, a new daemon reports ready and exits 0. That
-is how the initrd's splash carries on into the real root while
-`lys-splash-start.service` starts there too.
+| Option | Default | Effect |
+| --- | --- | --- |
+| `--mode=MODE` | `boot` | `boot`, `shutdown`, `reboot`, `kexec` or `updates` |
+| `--theme=FILE` | `/etc/lys-splash/theme.yaml` | Theme file |
+| `--pid-file=FILE` | none | Writes the pid here; removed on exit |
+| `--no-daemon` | off | As `plymouthd`, stays in the foreground |
+| `--debug` | off | Logs at debug level |
+| `--attach-to-session` | | Accepted and ignored; the splash always runs on the console's session |
 
-The units and scripts start the daemon; you should not need to.
+If a splash is already running, a new daemon reports ready and exits 0.
 
-## The client
+## Client
 
-The client talks to the daemon as plymouth's does, for scripts that call
-`plymouth`. Only root's requests are served; any other user's are refused, which
-is exit status 1.
+Requests are served for root only; other users get exit status 1.
 
-These take the place of the command, and only one runs:
+### Options
 
-| Option | What it does |
+Exactly one runs, instead of a command:
+
+| Option | Effect |
 | --- | --- |
 | `--ping` | Checks whether a daemon is running |
-| `--wait` | Waits until the daemon quits; exits 0 at once if none is running |
+| `--wait` | Waits until the daemon quits; exits 0 at once if none runs |
 | `--quit` | Tells the daemon to quit |
 | `--has-active-vt` | Checks whether the daemon has an active VT |
 | `--sysinit` | Tells the daemon the root is writable |
 | `--show-splash`, `--hide-splash` | Shows or hides the splash |
 | `--ask-for-password` | Asks for a password and prints it |
-| `--details` | Tells the daemon the boot hit an error |
+| `--details` | Reports a boot error |
 | `--newroot=DIR` | Tells the daemon the new root is mounted at DIR |
-| `--update=STATUS` | Tells the daemon a boot status |
+| `--update=STATUS` | Sends a boot status |
 | `--ignore-keystroke=KEYS` | Stops waiting for these keys |
 
-These are commands:
+### Commands
 
-| Command | What it does |
+| Command | Effect |
 | --- | --- |
 | `show-splash`, `hide-splash` | Shows or hides the splash |
 | `display-message --text=TEXT`, `message --text=TEXT` | Shows a message |
-| `hide-message --text=TEXT` | Hides that message, if it is the one showing |
-| `change-mode --MODE` | `--updates`, `--system-upgrade` and `--firmware-upgrade` show the update's progress bar; `--boot-up`, `--shutdown`, `--reboot` and `--system-reset` show the throbber |
-| `system-update --progress=N` | Shows the update's progress bar at N percent |
-| `update --status=STATUS` | Tells the daemon a boot status |
+| `hide-message --text=TEXT` | Hides that message if it is the one showing |
+| `change-mode --MODE` | `--updates`, `--system-upgrade`, `--firmware-upgrade`: update progress bar. `--boot-up`, `--shutdown`, `--reboot`, `--system-reset`: throbber |
+| `system-update --progress=N` | Update progress bar at N percent |
+| `update --status=STATUS` | Sends a boot status |
 | `update-root-fs --new-root-dir=DIR` | Moves the daemon into the root at DIR |
 | `update-root-fs --read-write` | Tells the daemon the root is writable |
-| `deactivate` | Drops DRM master and keeps the frame on screen, for the [hand-over](/guide/how-it-works#handing-the-screen-over) |
-| `reactivate` | Takes DRM master back and shows the splash again |
-| `quit` | Quits and gives the console back with the boot messages |
+| `deactivate` | Drops DRM master, keeps the frame on screen ([hand-over](/guide/how-it-works#hand-over-to-a-display-manager)) |
+| `reactivate` | Takes DRM master back and shows the splash |
+| `quit` | Quits and restores the console with the boot messages |
 | `quit --retain-splash` | Quits and leaves the frame on screen |
-| `reload` | Reads the theme file again |
+| `reload` | Re-reads the theme file |
 | `pause-progress`, `unpause-progress` | Pauses or resumes the animation |
-| `report-error` | Tells the daemon the boot hit an error, which it logs |
+| `report-error` | Reports a boot error, which the daemon logs |
 | `ignore-keystroke --keys=KEYS` | Stops waiting for these keys |
-| `ask-for-password` | Asks for a password |
-| `ask-question` | Asks a question, whose answer is echoed as it is typed |
+| `ask-for-password` | Asks for a password and prints it |
+| `ask-question` | Asks a question; the answer is echoed while typed |
 | `watch-keystroke --keys=KEYS` | Waits for one of these keys, or any key without `--keys` |
 
-`ask-for-password` takes `--prompt`, `--dont-pause-progress`, `--command` and
-`--number-of-tries`. `--command` runs a command with the password on its
-standard input, first trying every password already typed, then asking until
-the command succeeds or the tries run out; 0 tries is no limit. With no daemon
-running it runs the command without a password on standard input.
-`ask-question` takes `--prompt`, `--command` and `--dont-pause-progress`, and
-`watch-keystroke` takes `--command`.
+Prompt options:
+
+| Option | On | Effect |
+| --- | --- | --- |
+| `--prompt=TEXT` | `ask-for-password`, `ask-question` | Prompt text |
+| `--dont-pause-progress` | `ask-for-password`, `ask-question` | Keeps the animation running while asking |
+| `--command=CMD` | `ask-for-password`, `ask-question`, `watch-keystroke` | Runs CMD with the answer on standard input instead of printing it. CMD is split on whitespace, not by a shell |
+| `--number-of-tries=N` | `ask-for-password` | With `--command`, how often to ask; `0` (default) is no limit |
+
+`ask-for-password --command` first tries every password already typed, then
+asks until the command succeeds or the tries run out, and exits with the
+command's status. With no daemon running it runs the command with no standard
+input.
 
 ## Exit status
 
 | Status | Meaning |
 | --- | --- |
 | 0 | Done |
-| 1 | A refused request, an unanswered prompt or bad usage |
-| 2 | The daemon hung up in the middle of a request |
+| 1 | Refused request, unanswered prompt or bad usage |
+| 2 | The daemon hung up mid-request |
 | 3 | No daemon is running |
