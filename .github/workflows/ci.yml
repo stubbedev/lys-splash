@@ -1,6 +1,8 @@
 name: ci
 
 on:
+  schedule:
+    - cron: "17 3 * * 0"
   push:
     paths-ignore:
       - "docs/**"
@@ -29,7 +31,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: stubbedev/lys-ci/.github/actions/nix-setup@a8e349536974213f8abf2fc082e72e0731262fbb
+      - uses: stubbedev/lys-ci/.github/actions/nix-setup@bf3da3ebd3253f33f2f7696b4284986772da635f
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Gates (vet, lint, test, build)
@@ -44,7 +46,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: stubbedev/lys-ci/.github/actions/nix-setup@a8e349536974213f8abf2fc082e72e0731262fbb
+      - uses: stubbedev/lys-ci/.github/actions/nix-setup@bf3da3ebd3253f33f2f7696b4284986772da635f
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: An initramfs-tools image in Ubuntu holds the splash
@@ -63,7 +65,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: stubbedev/lys-ci/.github/actions/nix-setup@a8e349536974213f8abf2fc082e72e0731262fbb
+      - uses: stubbedev/lys-ci/.github/actions/nix-setup@bf3da3ebd3253f33f2f7696b4284986772da635f
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: NixOS VMs from a LUKS boot to lys-login's greeter and back down
