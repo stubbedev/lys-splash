@@ -70,8 +70,7 @@ with stage(machine, "cached passphrase"):
     unlocked(machine, [("crypt0", "/"), ("crypt1", "/data")])
 
 with stage(machine, "simpledrm to virtio-gpu"):
-    lit = machine.succeed("journalctl -b -o cat -u lys-splash-start -g 'lit an output'").splitlines()
-    assert len(lit) >= 2, f"the splash lit {lit}, not first simpledrm and then virtio-gpu"
+    machine.wait_until_succeeds("test $(journalctl -b -o cat -u lys-splash-start -g 'lit an output' | wc -l) -ge 2", timeout=60)
     machine.succeed("journalctl -b -o cat -u lys-splash-start -g 'a card went away'")
     machine.succeed("test $(cat /sys/firmware/acpi/bgrt/status) = 1")
 
