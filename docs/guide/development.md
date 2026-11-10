@@ -62,6 +62,10 @@ golangci-lint, delve, just, git, gh and the lys-ci tools, with
 | `vm-greeter-outputs` | Hand-over to the greeter with two vkms outputs, both lit by the splash and both taken by the greeter |
 | `vm-e2e` | The full path, each stage failing by name: OVMF and simpledrm, virtio-gpu, a LUKS root and a second LUKS disk unlocked by one passphrase at the splash, switch root, the plymouth client, hand-over to the greeter, the reboot splash, and a display-less machine typing its passphrase at the text fallback |
 
+virtio-gpu and vkms have no Vulkan driver, so `nix/greeter.nix` sets
+`LYS_WM_RENDERER=gles` in the session variables, which reach the greeter's
+lys-wm through PAM: it renders with GLES on llvmpipe instead of stopping.
+
 Expected frames live in `internal/theme/testdata/golden`; this site's pictures
 are those files.
 
