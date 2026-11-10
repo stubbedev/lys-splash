@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/stubbedev/lys-lib/peercred"
 	"golang.org/x/sys/unix"
 
 	"github.com/stubbedev/lys-splash/internal/protocol"
@@ -26,13 +27,6 @@ const (
 // ErrRunning is what Listen fails with when another daemon already listens
 // on the socket.
 var ErrRunning = errors.New("server: another daemon is already listening")
-
-// Peer is the process at the other end of a connection, as SO_PEERCRED
-// reports it when the connection is accepted.
-type Peer struct {
-	PID int32
-	UID uint32
-}
 
 // Handler receives a server's requests. Both methods are called from the
 // connection's own goroutine, in the order the client sent its requests,
@@ -59,7 +53,7 @@ type wire interface {
 type Conn struct {
 	c    *net.UnixConn
 	w    wire
-	peer Peer
+	peer peercred.Credentials
 	log  *slog.Logger
 
 	mu      sync.Mutex
@@ -68,12 +62,13 @@ type Conn struct {
 	drained chan struct{}
 }
 
-func newConn(c *net.UnixConn, w wire, peer Peer, log *slog.Logger) *Conn {
+func newConn(c *net.UnixConn, w wire, peer peercred.Credentials, log *slog.Logger) *Conn {
 	return &Conn{c: c, w: w, peer: peer, log: log, queue: make(chan []byte, replyQueue), drained: make(chan struct{})}
 }
 
-// Peer is the process that opened the connection.
-func (c *Conn) Peer() Peer {
+// Peer is the process that opened the connection, as SO_PEERCRED reports
+// it when the connection is accepted.
+func (c *Conn) Peer() peercred.Credentials {
 	return c.peer
 }
 
@@ -225,7 +220,7 @@ func (s *Server) Serve(h Handler) error {
 		if err != nil {
 			return fmt.Errorf("server: accept on %s: %w", s.ln.Addr(), err)
 		}
-		peer, err := peerOf(c)
+		peer, err := peercred.Of(c)
 		if err != nil {
 			s.log.Warn("dropping a connection whose peer is unknown", "err", err)
 			s.close(c, 0)
@@ -250,24 +245,6 @@ func (s *Server) track(c *Conn) bool {
 	s.conns[c] = struct{}{}
 	s.wg.Add(1)
 	return true
-}
-
-func peerOf(c *net.UnixConn) (Peer, error) {
-	raw, err := c.SyscallConn()
-	if err != nil {
-		return Peer{}, fmt.Errorf("server: the raw connection: %w", err)
-	}
-	var cred *unix.Ucred
-	var credErr error
-	if err := raw.Control(func(fd uintptr) {
-		cred, credErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
-	}); err != nil {
-		return Peer{}, fmt.Errorf("server: reach the socket: %w", err)
-	}
-	if credErr != nil {
-		return Peer{}, fmt.Errorf("server: SO_PEERCRED: %w", credErr)
-	}
-	return Peer{PID: cred.Pid, UID: cred.Uid}, nil
 }
 
 func (s *Server) serve(c *Conn) {
