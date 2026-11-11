@@ -20,6 +20,7 @@
     displayManager = "lys-login";
     compositorPackage = config.programs.lys-wm.package;
     splashPackage = splash;
+    settings.login.show-clock = false;
     session = {
       dirs = [];
       x11Dirs = [];
