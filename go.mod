@@ -3,7 +3,7 @@ module github.com/stubbedev/lys-splash
 go 1.27.4
 
 require (
-	github.com/stubbedev/lys-lib v0.3.20
+	github.com/stubbedev/lys-lib v0.3.22-0.20261112155543-c73de7dd1310
 	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/image v0.47.0
 	golang.org/x/sys v0.49.0
