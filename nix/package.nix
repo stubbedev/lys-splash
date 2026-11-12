@@ -2,6 +2,7 @@
   perSystem = {
     lib,
     pkgs,
+    inputs',
     ...
   }: let
     kernelCommandLineConditions = lib.concatMapStringsSep "\n" (c: "ConditionKernelCommandLine=${c}") [
@@ -23,7 +24,7 @@
       );
     };
   in {
-    packages.default = pkgs.buildGo127Module {
+    packages.default = (pkgs.buildGoModule.override {go = inputs'.devtools.packages.go;}) {
       pname = "lys-splash";
       version = "0-unstable-${lib.substring 0 8 (builtins.unsafeDiscardStringContext (baseNameOf src))}";
 
